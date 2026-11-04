@@ -1,0 +1,22 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+
+# Local artifacts
+*.json.bak
+output/
