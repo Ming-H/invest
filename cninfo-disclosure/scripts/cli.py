@@ -36,6 +36,7 @@ import sys
 from cninfo_client import DEFAULT_TIMEOUT, detect_market, parse_years
 from reports import REPORT_TYPES, download_report, search_reports
 from prospectus import download_prospectus, search_prospectus
+from forecast import download_forecast, search_forecast
 from research import download_research, search_research
 
 
@@ -81,6 +82,22 @@ def cmd_search(args):
             "success": True, "stock": args.stock, "doc_type": "research",
             "total": len(reports), "reports": reports,
         }, ensure_ascii=False, indent=2))
+        return
+
+    # 业绩预告：年份可选（不传取全部）
+    if doc_type == "forecast":
+        anns = search_forecast(args.stock, year=args.year, timeout=args.timeout)
+        out = {
+            "success": True, "stock": args.stock, "doc_type": "forecast",
+            "total": len(anns),
+            "announcements": [
+                {"title": a["title"], "date": a["date"], "pdf_url": a["pdf_url"]}
+                for a in anns
+            ],
+        }
+        if not anns:
+            out["tip"] = "未找到业绩预告。可能公司未披露，或名称/年份有误。"
+        print(json.dumps(out, ensure_ascii=False, indent=2))
         return
 
     if doc_type == "interim":
@@ -173,6 +190,12 @@ def cmd_download(args):
         print(json.dumps(res, ensure_ascii=False, indent=2))
         return
 
+    # 业绩预告：年份可选，可下载多份
+    if doc_type == "forecast":
+        res = download_forecast(args.stock, output_dir, year=args.year, timeout=args.timeout)
+        print(json.dumps(res, ensure_ascii=False, indent=2))
+        return
+
     if doc_type == "interim":
         print(json.dumps({
             "success": False, "market": "a", "stock": args.stock,
@@ -223,9 +246,9 @@ def _add_common_args(parser):
     parser.add_argument("--year", "-y", type=str, default=None,
                         help="年份：单年(2025)/范围(2023-2025)/枚举(2023,2025)。财报必填，招股书无需")
     parser.add_argument("--type", "-t", type=str,
-                        choices=list(REPORT_TYPES.keys()) + ["prospectus", "research", "all", "interim"],
+                        choices=list(REPORT_TYPES.keys()) + ["prospectus", "forecast", "research", "all", "interim"],
                         default="annual",
-                        help="文档类型: annual/semi/q1/q3（财报）/ prospectus（招股书）/ research（券商研报，无需年份）/ all / interim(港股中期)，默认 annual")
+                        help="文档类型: annual/semi/q1/q3（财报）/ prospectus（招股书）/ forecast（业绩预告，年份可选）/ research（券商研报，无需年份）/ all / interim(港股中期)，默认 annual")
     parser.add_argument("--market", "-m", type=str, choices=["auto", "a", "hk"], default="auto",
                         help="市场: auto(自动判断) / a(A股) / hk(港股)，默认 auto")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
