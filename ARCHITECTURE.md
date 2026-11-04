@@ -38,23 +38,27 @@
 - **持续引擎 tenscreener**：十倍股全周期——scout 三级漏斗找左侧错杀、runner 五阶段识别右侧主升、watch/track 管持有退出。决策环节。
 - **方法论层**：jingshui（选股方法论+财报六段式）/ can-slim（七要素）/ lynch（六分类）。被三引擎引用为判定标准；也可独立问答。单股深度精读走 jingshui 六段式（earnings-reader 的下游）。
 
-## 成员清单 · 职责矩阵（2026-11-05 精读定版）
+## 成员清单 · 职责矩阵（2026-11-05 v3：判断权威收拢版）
 
-| 技能 | 层 | 一句话角色 | 输入 | 输出 | 明确不做 |
+> 总纲：**一个任务（季频编排）+ 一个判断权威（十倍股判定）+ 一个哨兵（日频盯盘）+ 三部方法典 + 一个数据底座**——全市场入口唯一、判断逻辑唯一、日常监控唯一。
+
+| 技能 | 层 | 定位 | 输入 | 输出 | 明确不做 |
 |---|---|---|---|---|---|
-| earnings-reader | 引擎·季频 | **财报雷达（发现）**：披露季全市场过 40% 闸门 | 指定日期披露 | 标的池 Base + 财报阅读文档 | 不看价格位置；不做单股深读(→jingshui) |
-| tenscreener | 引擎·持续 | **收敛器与生命周期（决策）**：池→1-2 只，陪跑到退出 | 问财+K线+研报 | 亮灯名单/TPS/confirm/exit 信号 | 不给买卖指令(promote/close 永远人工)；不盯盘 |
-| a-share-review | 引擎·日频 | **盯盘哨兵（跟踪+预警）**：池内标的价格/资金/事件 | 当日行情+watchlist | 复盘文档+全息卡+E1 预警+回检 | 不发现新标的；不做估值 |
-| jingshui | 方法论 | **体系总纲（宪法）**+单股六段式深读 | 问题/财报PDF | 方法论框架/六段式报告 | 不跑流程不取数 |
-| can-slim | 方法论 | **单股当季体检清单**（C/A/N/S/L/I/M） | 个股 | 七要素体检表 | 不做生命周期；不做估值模型 |
-| lynch | 方法论 | **分类透镜**：六分类+配对估值尺+避雷 | 个股 | 分类+两分钟独白+跟踪清单 | 不做量化筛选 |
-| cninfo-disclosure | 数据 | **原始文档供给**（财报/招股书/研报/HKEX） | 公司+文档类型 | 本地 PDF/清单 | 不解读内容 |
+| earnings-reader | 引擎·**季频任务**(编排器) | 对指定日期披露跑完整流程: ①40%+卫生闸门 ②近4季同比环比表 ③调 tenscreener judge 判定 ④汇总输出 | 指定日期全市场披露 | 标的池 Base(带阶段/跟踪标注)+财报文档 | 不自建第二套判断(framework.py 仅兜底); 价格不决定入池资格只影响阶段标注 |
+| tenscreener | 引擎·**判断权威**(工具+生命周期) | judge: 代码→判定(是否十倍候选/七阶段/TPS/三线形态/信号); 外加 runner 右侧扫描 + watch/track | 单代码/右侧全市场 | 判定JSON/亮灯名单/confirm/exit信号 | 不做全市场基本面初筛(scout 二期改读池); 不给指令 |
+| a-share-review | 引擎·**日频哨兵** | 池内标的价格/资金/事件 + 公告雷达解读(v2.3) + 回检 | 当日行情+watchlist+新公告 | 复盘文档/全息卡/E1预警/公告解读 | 不发现新标的; 不做判断(归 judge) |
+| jingshui | 方法论·总典 | 静水宪法(40%线/5不买/纪律)+六段式深读 | 问题/财报PDF | 框架/六段式报告 | 存标准不执行(执行归 judge) |
+| can-slim | 方法论·体检典 | 七要素清单(judge 打分骨架的知识源) | 个股 | 体检表 | 同上 |
+| lynch | 方法论·透镜典 | 六分类/估值尺/避雷 | 个股 | 分类+独白 | 同上 |
+| cninfo-disclosure | 数据·底座 | 财报/招股书/研报/HKEX 文档供给 | 公司+文档类型 | PDF/清单 | 不解读内容 |
 
-**标的的一生**：earnings-reader 闸门入池 → tenscreener 收敛+确认 / jingshui 深读 → 人工建仓 → a-share-review 每日盯 + tenscreener track 每季查 → exit_signal 告警 → 人工清仓 → a-share-review 回检积累信用。
+**关键变化(v2→v3)**: 判断逻辑从两套并行(earnings-reader framework.py / tenscreener TPS)收拢为 tenscreener judge 唯一权威; 全市场基本面扫描从两台收拢为 earnings-reader 一台; 两技能关系从"经池松耦合"变为"任务调功能"(CLI shell-out, 同 flow.py 调问财 cli 先例)。
 
-**边界裁决**：基本面闸门=earnings-reader；价格位置=tenscreener；日常异动=a-share-review；大盘β=三家共用口径(MA5/20+年线)；单股深读=jingshui；买卖动作=永远人工。
+**标的的一生**: 财报季任务(闸门→judge判定→入池带标注) → 平时 judge 单点咨询/runner 右侧扫描 → 人工建仓 → a-share-review 每日盯+公告解读 → 每季 judge 复判(watch/track) → exit_signal → 人工清仓 → 回检积累信用。
 
-**已知断点（待接线）**：① 三处池未统一(tenscreener watchlist / a-share-review watchlist / 标的池 Base 各自记账)——目标：Base 为唯一真源, 引擎 watchlist 读写 Base, tenscreener 状态机(scouted/confirmed/holding)映射 Base 状态列(观察/深研/已买)；② 发现→深读交接靠人(建议 Base 状态流转到"深研"时触发)；③ lynch 六分类未入 Base 标签。
+**边界裁决**: 全市场闸门与四季表=earnings-reader; 十倍判定(候选/阶段/TPS/信号)=tenscreener judge; 价格位置=judge 内嵌; 日常异动+公告=a-share-review; 单股深读=jingshui; 方法标准=三部典存而不执行; 买卖=永远人工。
+
+**待接线(v3 落地四步+原有两项)**: ① tenscreener judge 子命令(组装 quarters/scorer/monitor/runner) ② earnings-reader 接 judge, framework.py 转兜底 ③ 池加〔阶段/TPS/跟踪〕列, 状态机对齐 ④ scout 改读池 ⑤ a-share-review ★标注切新池 ⑥ lynch 分类入池标签。
 
 ## 接口约定（引擎间只通过这三种介质协作，禁止跨技能 import 代码）
 
