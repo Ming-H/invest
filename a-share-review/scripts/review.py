@@ -50,6 +50,85 @@ PASS_LINE = 40.0  # 静水增速线(E1预警用)
 
 # ---------------- watchlist ----------------
 
+# ---------------- 模块四B: 公告雷达(重点标的, 2026-11-05 移植自 h1-monitor watch_radar) ----------------
+
+# 程序性公告: 只列出不解读(标题党噪音, watch_radar 实测经验)
+ANN_ROUTINE = ("董事会决议", "监事会", "股东大会", "年度报告", "季度报告", "半年度报告",
+               "摘要", "更正", "补充公告", "独立董事", "审计委员会", "召开", "投票",
+               "网上说明会", "公司章程", "取消", "延期", "工商变更", "募集资金存放",
+               "专项意见", "中介机构", "持续督导")
+# 关键公告: 下载 PDF 供 Claude 解读
+ANN_KEY = ("业绩预告", "业绩快报", "预增", "预减", "预亏", "扭亏", "重大合同", "中标",
+           "回购", "增持", "减持", "质押", "解除质押", "停牌", "复牌", "立案", "问询",
+           "监管", "警示", "辞职", "离职", "聘任", "定增", "向特定对象发行", "配股",
+           "可转债", "分红", "派息", "股权激励", "收购", "出售", "转让", "投资协议",
+           "战略合作", "重大事项", "停产", "事故", "诉讼", "仲裁", "冻结", "业绩修正")
+ANN_PDF_CAP = 6   # 单日最多下 PDF 解读的公告数(防素材包爆炸)
+
+
+def announcement_radar(stocks, outdir, days=2):
+    """重点标的公告雷达: 昨今(days=2)新公告 -> 关键词分级(关键下PDF/程序性只列) ->
+    渲染 ⟦CLAUDE⟧ 解读占位 + PDF 文本落 ann_texts.md(素材包, 不进正稿)。
+    seen 按 pdf_url 跨日去重(outputs/ann_seen.json), 同一公告只解读一次。
+    -> (section_lines, 新公告数, 带PDF数)。"""
+    seen_fp = os.path.join(OUTROOT, "ann_seen.json")
+    seen = {}
+    if os.path.exists(seen_fp):
+        try:
+            seen = json.load(open(seen_fp, encoding="utf-8"))
+        except Exception:
+            seen = {}
+    L = ["## 四B、公告雷达（重点标的 %d 只）" % len(stocks),
+         "> 窗口: 近%d日新公告 | 关键公告带解读, 程序性只列 | 同一公告跨日只解读一次" % days, ""]
+    texts, n_new, n_pdf = [], 0, 0
+    for s in stocks:
+        code = str(s.get("code")).split(".")[0]
+        name = s.get("name") or code
+        try:
+            anns = data.announcements_recent(code, days=days, limit=15)
+        except Exception:
+            anns = []
+        new = [a for a in anns if a.get("pdf_url") and a["pdf_url"] not in seen]
+        for a in new:
+            seen[a["pdf_url"]] = {"stock": code, "date": a["date"], "title": a["title"][:60]}
+        if not new:
+            continue
+        n_new += len(new)
+        cost = s.get("cost")
+        L.append("- **%s(%s)**（%s, %d 条新公告）：" % (name, code, "持仓" if cost else "观察", len(new)))
+        for a in new:
+            # 判定: 命中关键关键词 -> 解读(标题同时含 摘要/更正/补充 的降级为程序性); 其余只列
+            is_key = any(k in a["title"] for k in ANN_KEY) and not any(
+                r in a["title"] for r in ("摘要", "更正", "补充"))
+            if is_key and n_pdf < ANN_PDF_CAP:
+                txt = data.ann_pdf_text(a["pdf_url"])
+                if txt:
+                    n_pdf += 1
+                    texts.append("## %s(%s)《%s》(%s)\n%s" % (name, code, a["title"], a["date"], txt))
+                    L.append("  - 《%s》(%s) ⟦CLAUDE: 公告解读——读同目录 ann_texts.md 对应段, "
+                             "结合该股(%s%s), 3行内答: ①说了什么(数字/条款) ②改变了什么(结合该股状态) "
+                             "③该盯什么; 无实质信息就一句话带过⟧"
+                             % (a["title"][:44], a["date"][5:], "持仓成本%s" % cost if cost else "观察组",
+                                (" 触发位" + str(s.get("trig"))) if s.get("trig") else ""))
+                else:
+                    L.append("  - 《%s》(%s) ⚠PDF下载失败(链接见巨潮)" % (a["title"][:44], a["date"][5:]))
+            else:
+                L.append("  - 《%s》(%s) — 程序性" % (a["title"][:44], a["date"][5:]))
+        L.append("")
+    if n_new == 0:
+        L.append("近%d日重点标的无新公告。" % days)
+        L.append("")
+    # 素材落盘(不进正稿) + seen 台账
+    if texts:
+        open(os.path.join(outdir, "ann_texts.md"), "w", encoding="utf-8").write(
+            "# 公告原文素材(解读用, 不进正稿)\n\n" + "\n\n---\n\n".join(texts) + "\n")
+    try:
+        json.dump(seen, open(seen_fp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+    return L, n_new, n_pdf
+
+
 def load_watchlist():
     if os.path.exists(WATCHLIST):
         try:
@@ -453,6 +532,14 @@ def build(args):
                 imgs.append((p, anchor[:4]))
         except Exception:
             pass
+
+    # ===== 模块四B 公告雷达(重点标的, 2026-11-05; 异常不阻塞复盘) =====
+    try:
+        radar_lines, ann_new, ann_pdf = announcement_radar(wl, outdir)
+        lines += radar_lines
+        print("[radar] 新公告%d条, 带PDF解读%d条" % (ann_new, ann_pdf), flush=True)
+    except Exception as ex:
+        lines += ["## 四B、公告雷达", "> ⚠ 雷达异常(不影响其余模块): %s" % str(ex)[:80], ""]
 
     # ===== 模块五 三行小结 + 昨日观察回检 =====
     trend = (msh or {}).get("trend", "—")

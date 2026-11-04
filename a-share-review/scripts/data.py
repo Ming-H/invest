@@ -486,25 +486,93 @@ def stock_news(name, limit=5):
         return []
 
 
+_ORGID_CACHE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "outputs", "orgids.json")
+
+
+def _cninfo_orgids():
+    """代码 -> orgId 映射(巨潮官方 szse_stock.json, 全市场)。本地缓存 outputs/orgids.json。
+    实测坑(2026-11-05): hisAnnouncement 的 stock 参数必须是 "代码,orgId" —— 旧版传
+    "代码,sh/sz" 且 column 恒 szse, 沪市标的(60x/68x)永远返回 0 条, 全息卡"近7日公告"
+    对沪市持仓一直静默空。"""
+    if os.path.exists(_ORGID_CACHE):
+        try:
+            return json.load(open(_ORGID_CACHE, encoding="utf-8"))
+        except Exception:
+            pass
+    try:
+        req = urllib.request.Request("http://www.cninfo.com.cn/new/data/szse_stock.json",
+                                     headers={"User-Agent": "Mozilla/5.0",
+                                              "Referer": "http://www.cninfo.com.cn/"})
+        m = {s["code"]: s["orgId"] for s in
+             json.loads(urllib.request.urlopen(req, timeout=20).read().decode())["stockList"]}
+        os.makedirs(os.path.dirname(_ORGID_CACHE), exist_ok=True)
+        json.dump(m, open(_ORGID_CACHE, "w", encoding="utf-8"), ensure_ascii=False)
+        return m
+    except Exception:
+        return {}
+
+
 def announcements_recent(code, days=7, limit=6):
-    """巨潮公告(日期区间版): [{title, date}]。北交所 code 8/4/92 开头走 bjse column。"""
+    """巨潮公告(日期区间版): [{title, date, pdf_url}]。
+    正确姿势(2026-11-05 实测): column 按市场(sse/bjse/szse) + stock="代码,orgId"。"""
     end = datetime.date.today()
     start = end - datetime.timedelta(days=days)
-    bj = str(code).split(".")[0].startswith(("92", "43", "83", "87", "88"))
+    c = str(code).split(".")[0]
+    column = "bjse" if c.startswith(("92", "43", "83", "87", "88")) else ("sse" if c.startswith(("6", "9")) else "szse")
+    org = _cninfo_orgids().get(c)
+    if not org:
+        return []
     try:
         d = _post("http://www.cninfo.com.cn/new/hisAnnouncement/query", {
             "pageNum": 1, "pageSize": limit,
-            "column": "bjse" if bj else "szse", "tabName": "fulltext",
-            "stock": "%s,%s" % (code, ("bj" if bj else ("sh" if str(code).startswith("6") else "sz"))),
+            "column": column, "tabName": "fulltext",
+            "stock": "%s,%s" % (c, org),
             "seDate": "%s~%s" % (start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")),
             "searchkey": "", "secid": "", "plate": "", "category": "", "isHLtitle": "true",
         })
         anns = (d.get("announcements") or [])
-        return [{"title": (a.get("announcementTitle") or "").replace("<em>", "").replace("</em>", ""),
-                 "date": time.strftime("%Y-%m-%d", time.localtime((a.get("announcementTime") or 0) / 1000))}
-                for a in anns if a.get("announcementTitle")]
+        out = []
+        for a in anns:
+            if not a.get("announcementTitle"):
+                continue
+            pdf = ""
+            adj = (a.get("adjunctUrl") or "").strip()
+            if adj:
+                pdf = "https://static.cninfo.com.cn/" + adj.lstrip("/")   # adjunctUrl 带不带前导/都归一
+            out.append({"title": (a.get("announcementTitle") or "").replace("<em>", "").replace("</em>", ""),
+                        "date": time.strftime("%Y-%m-%d", time.localtime((a.get("announcementTime") or 0) / 1000)),
+                        "pdf_url": pdf})
+        return out
     except Exception:
         return []
+
+
+def ann_pdf_text(pdf_url, max_chars=3000):
+    """公告 PDF -> 文本(pdftotext, 免费): 下载到 /tmp(ASCII名) -> 前30页转文本 -> 截断 -> 清理。
+    公告雷达解读素材用(移植自 h1-monitor watch_radar 的 pdftotext 经验: >30页读前30页
+    主体足够; 大多数公告 <10 页)。失败返回 None。"""
+    import subprocess as _sp
+    if not pdf_url:
+        return None
+    tmp = "/tmp/asr_ann_%d.pdf" % int(time.time() * 1000)
+    try:
+        req = urllib.request.Request(pdf_url, headers=UA)
+        open(tmp, "wb").write(urllib.request.urlopen(req, timeout=30).read())
+        txt = tmp + ".txt"
+        p = _sp.run(["pdftotext", "-layout", "-l", "30", tmp, txt],
+                    capture_output=True, timeout=120)
+        if p.returncode == 0 and os.path.exists(txt) and os.path.getsize(txt) > 200:
+            return open(txt, encoding="utf-8", errors="ignore").read()[:max_chars]
+    except Exception:
+        return None
+    finally:
+        for f in (tmp, tmp + ".txt"):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+    return None
 
 
 # ---------------- 模块四新增: 事件区 + 财报三线 ----------------
