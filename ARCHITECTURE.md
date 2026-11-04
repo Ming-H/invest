@@ -38,15 +38,23 @@
 - **持续引擎 tenscreener**：十倍股全周期——scout 三级漏斗找左侧错杀、runner 五阶段识别右侧主升、watch/track 管持有退出。决策环节。
 - **方法论层**：jingshui（选股方法论+财报六段式）/ can-slim（七要素）/ lynch（六分类）。被三引擎引用为判定标准；也可独立问答。单股深度精读走 jingshui 六段式（earnings-reader 的下游）。
 
-## 成员清单
+## 成员清单 · 职责矩阵（2026-11-05 精读定版）
 
-| 成员 | 层 | 节奏 | 前身 |
-|---|---|---|---|
-| earnings-reader | 引擎 | 季频 | h1-monitor v7.3（阿里云 cron，待退役） |
-| a-share-review | 引擎 | 日频 | — |
-| tenscreener | 引擎 | 持续 | — |
-| jingshui / can-slim / lynch | 方法论 | 被引用 | — |
-| cninfo-disclosure | 数据 | 被调用 | 原 hermes 组件 |
+| 技能 | 层 | 一句话角色 | 输入 | 输出 | 明确不做 |
+|---|---|---|---|---|---|
+| earnings-reader | 引擎·季频 | **财报雷达（发现）**：披露季全市场过 40% 闸门 | 指定日期披露 | 标的池 Base + 财报阅读文档 | 不看价格位置；不做单股深读(→jingshui) |
+| tenscreener | 引擎·持续 | **收敛器与生命周期（决策）**：池→1-2 只，陪跑到退出 | 问财+K线+研报 | 亮灯名单/TPS/confirm/exit 信号 | 不给买卖指令(promote/close 永远人工)；不盯盘 |
+| a-share-review | 引擎·日频 | **盯盘哨兵（跟踪+预警）**：池内标的价格/资金/事件 | 当日行情+watchlist | 复盘文档+全息卡+E1 预警+回检 | 不发现新标的；不做估值 |
+| jingshui | 方法论 | **体系总纲（宪法）**+单股六段式深读 | 问题/财报PDF | 方法论框架/六段式报告 | 不跑流程不取数 |
+| can-slim | 方法论 | **单股当季体检清单**（C/A/N/S/L/I/M） | 个股 | 七要素体检表 | 不做生命周期；不做估值模型 |
+| lynch | 方法论 | **分类透镜**：六分类+配对估值尺+避雷 | 个股 | 分类+两分钟独白+跟踪清单 | 不做量化筛选 |
+| cninfo-disclosure | 数据 | **原始文档供给**（财报/招股书/研报/HKEX） | 公司+文档类型 | 本地 PDF/清单 | 不解读内容 |
+
+**标的的一生**：earnings-reader 闸门入池 → tenscreener 收敛+确认 / jingshui 深读 → 人工建仓 → a-share-review 每日盯 + tenscreener track 每季查 → exit_signal 告警 → 人工清仓 → a-share-review 回检积累信用。
+
+**边界裁决**：基本面闸门=earnings-reader；价格位置=tenscreener；日常异动=a-share-review；大盘β=三家共用口径(MA5/20+年线)；单股深读=jingshui；买卖动作=永远人工。
+
+**已知断点（待接线）**：① 三处池未统一(tenscreener watchlist / a-share-review watchlist / 标的池 Base 各自记账)——目标：Base 为唯一真源, 引擎 watchlist 读写 Base, tenscreener 状态机(scouted/confirmed/holding)映射 Base 状态列(观察/深研/已买)；② 发现→深读交接靠人(建议 Base 状态流转到"深研"时触发)；③ lynch 六分类未入 Base 标签。
 
 ## 接口约定（引擎间只通过这三种介质协作，禁止跨技能 import 代码）
 
