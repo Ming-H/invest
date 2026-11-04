@@ -44,7 +44,7 @@ python3 scripts/pipeline.py --date 2026-10-30 --finalize --publish
 ```
 
 校验 judge_output（枚举合法/催化条数；缺漏走兜底）→ L2 五维评分+硬闸+S/A/R/B 分级 → `final.md`
-→ lark-cli 写标的池 Base（upsert by 股票代码）+ 文档发布到飞书「投资/财报阅读」→ 报 URL 给用户。
+→ lark-cli 写标的池 Base（upsert by 股票代码）+ 文档发布到飞书**我的空间根目录**（与历史分析文档同级，不新建文件夹）→ 报 URL 给用户。
 
 ## 口径速记（详规见 ../CONVENTIONS.md 与 docs/DESIGN.md §5）
 

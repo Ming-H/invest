@@ -7,7 +7,7 @@
   - 报告期不再手改常量: detect_period() 从披露行众数自动识别(支持任意季)
   - headless GLM 全删: 催化压缩与 L2 枚举判定由对话内 Claude 产出 judge_output.json,
     本脚本只做校验(枚举合法/催化恰好n条)与确定性兜底 —— 缺漏不阻塞发布
-  - 输出: 标的池 Base(upsert by 股票代码) + 飞书「投资/财报阅读」文档
+  - 输出: 我的空间根目录的 标的池 Base(upsert by 股票代码) + 财报阅读文档(不建文件夹, 用户约定)
 
 用法:
   pipeline.py --date 2026-10-30 --draft                 # ① 草稿+判定输入
@@ -838,27 +838,6 @@ def _pool_save(cfg):
     json.dump(cfg, open(PROCESSED, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
 
 
-def ensure_folder(name, parent=""):
-    """确保文件夹存在 -> token。lark-cli drive 无列举命令 -> 缓存未命中即创建
-    (若飞书里已有同名文件夹会产生重复, 首次运行后 token 进缓存不再重复建)。"""
-    cfg = _pool_cfg()
-    key = "folder:" + (parent + "/" if parent else "") + name
-    if cfg.get(key):
-        return cfg[key]
-    token = ""
-    rc, out, _ = run('%s drive +create-folder --name "%s" %s --as user --format json'
-                     % (LARK, name, ('--folder-token ' + parent) if parent else ""), timeout=60)
-    try:
-        d = json.loads(out[out.index("{"):])
-        token = (d.get("data") or {}).get("token") or (d.get("data") or {}).get("folder_token") or ""
-    except Exception:
-        pass
-    if token:
-        cfg[key] = token
-        _pool_save(cfg)
-    return token
-
-
 POOL_FIELDS = ('[{"name":"股票代码","type":"text"},'
                '{"name":"股票名称","type":"text"},'
                '{"name":"纳入日期","type":"date"},'
@@ -871,38 +850,25 @@ POOL_FIELDS = ('[{"name":"股票代码","type":"text"},'
 
 
 def ensure_pool_table():
-    """标的池 Base/表: cache 记 (base_token, table_id); 首次新建(投资 标的池.base)。"""
+    """标的池 Base/表: cache 记 (base_token, table_id); 首次用 +base-create 一次建库+首表+字段
+    (官方姿势, 见 lark-base skill; +app-create 是 BaseApp 专用需 workspace-token, 别用)。
+    落位: 我的空间根目录(与历史分析文档同级, 用户约定不新建文件夹)。"""
     cfg = _pool_cfg()
     if cfg.get("pool_base") and cfg.get("pool_table"):
         return cfg["pool_base"], cfg["pool_table"]
-    # 先在既有 Base 里找同名表(用户手工建过也认)
-    if cfg.get("pool_base"):
-        rc, out, _ = run('%s base +app-get --base-token %s --as user --format json' % (LARK, cfg["pool_base"]), timeout=60)
-        m = re.search(r'"table_id"\s*:\s*"(tbl[^"]+)"[^}]*"name"\s*:\s*"标的池"|\"name\"\s*:\s*\"标的池\"[^}]*\"table_id\"\s*:\s*\"(tbl[^\"]+)\"', out or "")
-        if m:
-            cfg["pool_table"] = m.group(1) or m.group(2)
-            _pool_save(cfg)
-            return cfg["pool_base"], cfg["pool_table"]
-    rc, out, _ = run('%s base +app-create --name "标的池" --as user --format json' % LARK, timeout=120)
-    base_token = ""
+    rc, out, _ = run("%s base +base-create --name 标的池 --table-name 标的池 "
+                     "--fields '%s' --as user --format json" % (LARK, POOL_FIELDS), timeout=120)
+    base_token, table_id = "", ""
     try:
         d = json.loads(out[out.index("{"):])
-        base_token = (d.get("data") or {}).get("app_token") or (d.get("data") or {}).get("token") or ""
+        data = d.get("data") or {}
+        base_token = data.get("base_token") or data.get("app_token") or ""
+        table_id = data.get("table_id") or ""
     except Exception:
         pass
-    if not base_token:
-        log("  ⚠ Base 新建失败(可手工建『标的池』Base 后把 app_token 写入 cache/pool_base.json: {\"pool_base\": \"...\"})")
+    if not base_token or not table_id:
+        log("  ⚠ Base 建库失败 —— 可手工建『标的池』Base 后把 base_token/table_id 写入 cache/pool_base.json")
         return "", ""
-    table_id = ""
-    rc, out, _ = run('%s base +table-create --base-token %s --name "标的池" --fields \'%s\' --as user --format json'
-                     % (LARK, base_token, POOL_FIELDS), timeout=120)
-    try:
-        d = json.loads(out[out.index("{"):])
-        table_id = (d.get("data") or {}).get("table_id") or ""
-    except Exception:
-        pass
-    if not table_id:
-        log("  ⚠ 表新建失败 —— 请在飞书该 Base 里手工建『标的池』表后, 把 table_id 写入 cache/pool_base.json")
     cfg["pool_base"], cfg["pool_table"] = base_token, table_id
     _pool_save(cfg)
     return base_token, table_id
@@ -978,9 +944,7 @@ def cmd_publish(a):
     if not os.path.exists(final):
         log("未找到 final.md —— 先 --finalize")
         return 1
-    # 文档 -> 投资/财报阅读
-    inv = ensure_folder("投资")
-    sub = ensure_folder("财报阅读", parent=inv) if inv else ""
+    # 文档 -> 我的空间根目录(与历史分析文档同级; 用户约定: 不新建文件夹)
     s, e_ = m["window"]
     name = "%s年%s月%s日 财报阅读" % (s[:4], str(int(s[5:7])), str(int(s[8:10]))) if s == e_ else \
         "%s年%s月%s日~%s月%s日 财报阅读" % (s[:4], str(int(s[5:7])), str(int(s[8:10])),
@@ -988,9 +952,8 @@ def cmd_publish(a):
     exp = os.path.join(CACHE, "publish_%s.md" % m["tag"])
     with open(exp, "w", encoding="utf-8") as f:
         f.write(open(final, encoding="utf-8").read())
-    rc, out, err = run('cd %s && %s drive +import --file %s --type docx --name "%s" %s --as user'
-                       % (CACHE, LARK, os.path.basename(exp), name,
-                          ('--folder-token ' + sub) if sub else ""), timeout=300)
+    rc, out, err = run('cd %s && %s drive +import --file %s --type docx --name "%s" --as user'
+                       % (CACHE, LARK, os.path.basename(exp), name), timeout=300)
     doc_url = ""
     for line in (out or "").splitlines():
         if '"url"' in line:
