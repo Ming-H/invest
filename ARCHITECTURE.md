@@ -62,3 +62,16 @@
 3. 持仓/仓位管理层（静水仓位纪律的执行层，tenscreener track 覆盖一半）
 4. 交易决策日志（判断沉淀+事后回检，a-share-review 昨日回检为雏形）
 5. a-share-review 旧 h1-monitor Base ★标注切到新标的池
+
+## 安装与更新（2026-11-04 定案）
+
+**开发/仓库 = 嵌套结构；安装 = 平铺真实目录**（Claude Code 只发现 `skills/<名>/SKILL.md` 平铺一层，嵌套与软链方案已评估并放弃，见本节历史讨论）。
+
+```bash
+./install.sh                    # 克隆/更新 ~/.claude/skill-repos/invest → rsync 平铺到 work/.claude/skills/
+./install.sh <目标skills目录>    # 自定义目标
+```
+
+- 安装副本是**拷贝**不是引用：改代码走「开发目录改 → push → 重跑 install.sh（rsync 增量秒级）」，勿直接改安装副本
+- `outputs/ cache/ watchlist.json` 在安装副本侧受保护，更新永不覆盖（运行数据与代码分离）
+- 各技能 git 历史: subtree 全量并入本仓主线（`git log --oneline -- <技能>/` 可溯），GitHub 散仓已归档
