@@ -18,7 +18,9 @@ v2 变更(2026-11-02 设计升级):
 - 东财 push2/push2his/datacenter (行情批量/K线/解禁/披露) — 免费
 - 腾讯 fqkline / 新浪 CN_MarketDataService (K线后备) — 免费
 - 问财 cli (涨幅榜/连板/三线, 经 hithink-market-query, 消耗问财额度)
-- hithink-moneyflow flow.py (板块主力净流入/流出, 消耗问财额度)
+- 板块资金流: 内置 flow.py 模块(2026-11-05 收编自 hithink-moneyflow 技能, 同样经
+  hithink-market-query cli, 消耗问财额度; ~/.claude/skills 已废弃, 路径走 flow 的
+  多位置探测)
 - 巨潮 hisAnnouncement (公告) + 华尔街见闻 (新闻) — 免费
 所有函数失败返回 None/[]/(err) 并带 degraded 标记, 不阻塞整体复盘。
 """
@@ -31,10 +33,11 @@ import time
 import urllib.parse
 import urllib.request
 
+import flow
+
 UA = {"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com"}
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-WENCAI_CLI = os.path.expanduser("~/.claude/skills/hithink-market-query/scripts/cli.py")
-FLOW_CLI = os.path.expanduser("~/.claude/skills/hithink-moneyflow/scripts/flow.py")
+WENCAI_CLI = str(flow.wencai_cli_path()) if flow.wencai_cli_path() else ""   # 同一探测逻辑
 ENV = dict(os.environ)
 for envf in ("~/.hithink_env", "~/.claude/.hithink_env"):
     p = os.path.expanduser(envf)
@@ -349,24 +352,20 @@ def jingxuan_members():
         return {}, "lark-cli拉取精选表失败: %s" % str(ex)[:80]
 
 
-# ---------------- 模块三: 板块资金流(复用 moneyflow skill) ----------------
+# ---------------- 模块三: 板块资金流(内置 flow 模块, 2026-11-05 收编) ----------------
 
 def sector_flows(top_in=8, top_out=6):
     """行业板块主力净流入/流出: {inflow: [...], outflow: [...]}。"""
     res = {"inflow": [], "outflow": []}
-    if not os.path.exists(FLOW_CLI):
+    if flow.wencai_cli_path() is None:
         return res
     for view, key, n in (("industry-inflow", "inflow", top_in), ("industry-outflow", "outflow", top_out)):
         try:
-            out = subprocess.check_output(
-                ["python3", FLOW_CLI, "--view", view, "--top", str(n), "--format", "json"],
-                env=ENV, timeout=90, stderr=subprocess.DEVNULL).decode("utf-8", "ignore")
-            m = re.search(r"\{.*\}", out, re.S)
-            data = json.loads(m.group(0)) if m else {}
+            rows, _meta = flow.fetch_rows(view, top=n, timeout=90)
             res[key] = [{"name": r.get("name"),
                          "amount": round((r.get("amount") or 0) / 1e8, 2),
-                         "pct": r.get("pct")} for r in (data.get("rows") or [])]
-        except Exception:
+                         "pct": r.get("pct")} for r in rows]
+        except flow.FlowError:
             res[key] = []
     return res
 
