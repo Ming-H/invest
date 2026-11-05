@@ -53,7 +53,10 @@ TPS = 0.30·F1行业空间 + 0.20·F2终点可达 + 0.15·F3市值衰减
 
 1. `python3 scripts/cli.py judge --code 603259` —— 全免费源取数(东财F10/资产负债表/股东/主营构成/一致预期+腾讯K线+巨潮PDF, 零问财额度), 产 `outputs/judge/{代码}_{日期}/pack.md`(判定素材包: 八季三线/先行信号/股东进退/报告章节原文/价格与β/算法阶段预判+判定模板)
 2. **Claude 判定**: 读 pack.md, 结合 `../jingshui/references/财报分析框架.md`(核心因子7条+5不买)、`../can-slim/SKILL.md`(七要素)、`../lynch/SKILL.md`(六分类) 写同目录 `verdict.json`(schema 见 pack.md 第八节; 校验失败走确定性兜底不阻塞)
-3. `python3 scripts/cli.py judge --code 603259 --finalize` —— 校验+组装 `report.md`(结论/阶段/三清单/**跨期趋势判定**/风险与跟踪)
+3. `python3 scripts/cli.py judge --code 603259 --publish` —— 校验+组装+**发布飞书文档**并清理中间产物
+   (本地只留最终 report.md + feishu_url.txt; 中间件 pack/verdict/texts 发布成功即清)。
+   飞书文件夹: `--folder <token>` 首次指定后持久(存 cache/config.json 的 judge_folder), 未配置落我的空间根目录。
+   仅组装不发布用 `--finalize`。
 
 **跨期趋势记分卡(v3.1, 2026-11-05)**: 素材包第八节由确定性代码(trend.py)硬算七类跨期信号并
 **强制渲染**——A指引漂移(全年收入/利润指引区间跨期时间线, "由X上调至Y"期内上修也计上调;

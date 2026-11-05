@@ -83,6 +83,9 @@ def cmd_judge(args):
     import judge as _j
     code6 = str(args.code).split(".")[0]
     outdir = os.path.join(OUT_ROOT, "judge", "%s_%s" % (code6, date.today().strftime("%Y%m%d")))
+    if getattr(args, "publish", False):
+        ok, url = _j.publish(args.code, folder=getattr(args, "folder", None))
+        return
     if args.finalize:
         ok, path = _j.finalize(code6)
         if ok:
@@ -592,6 +595,10 @@ def build_parser():
                     help="快速模式: 跳过财报PDF下载与章节抽取, 纯API素材包(MD&A/募投/风险全文将缺席)")
     jp.add_argument("--pdf-dir", default=None,
                     help="PDF 归档目录(首次指定后持久为默认; 默认 outputs/pdf_library; 环境变量 TENSCREENER_PDF_DIR 亦可)")
+    jp.add_argument("--publish", action="store_true",
+                    help="发布: finalize + 上传飞书文档 + 清理中间产物(本地只留 report.md; 需已写 verdict.json)")
+    jp.add_argument("--folder", default=None,
+                    help="飞书目标文件夹 token(首次指定后持久为默认; 不指定用 config.judge_folder 或根目录)")
     jp.set_defaults(func=cmd_judge)
 
     return p

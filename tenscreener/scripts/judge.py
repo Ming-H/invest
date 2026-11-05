@@ -56,27 +56,95 @@ DEFAULT_PDF_LIB = os.path.join(OUTROOT, "pdf_library")
 def resolve_pdf_dir(cli_val=None):
     """-> (dir, 来源)。cli_val 显式传入时持久化到 cache/config.json(首次指定即默认)。"""
     if cli_val:
-        try:
-            os.makedirs(os.path.dirname(PDF_CFG), exist_ok=True)
-            cfg = {}
-            if os.path.exists(PDF_CFG):
-                cfg = json.load(open(PDF_CFG, encoding="utf-8"))
-            cfg["pdf_dir"] = cli_val
-            json.dump(cfg, open(PDF_CFG, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-        except Exception:
-            pass
+        _save_cfg({"pdf_dir": cli_val})
         return cli_val, "本次指定(已记住为默认)"
     env = os.environ.get(PDF_ENV)
     if env:
         return env, "环境变量"
-    if os.path.exists(PDF_CFG):
+    v = _load_cfg().get("pdf_dir")
+    if v:
+        return v, "持久配置"
+    return DEFAULT_PDF_LIB, "默认(首次使用可 --pdf-dir 指定并记住)"
+
+
+def _load_cfg():
+    try:
+        return json.load(open(PDF_CFG, encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_cfg(updates):
+    try:
+        os.makedirs(os.path.dirname(PDF_CFG), exist_ok=True)
+        cfg = _load_cfg()
+        cfg.update(updates)
+        json.dump(cfg, open(PDF_CFG, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    except Exception:
+        pass
+
+
+LARK = os.path.join(os.path.expanduser("~"), ".npm-global", "bin", "lark-cli")
+
+
+def resolve_folder(cli_val=None):
+    """飞书目标文件夹(判定报告落点): --folder 指定(持久) > config.judge_folder > 根目录。"""
+    if cli_val:
+        _save_cfg({"judge_folder": cli_val})
+        return cli_val, "本次指定(已记住为默认)"
+    v = _load_cfg().get("judge_folder")
+    if v:
+        return v, "持久配置"
+    return "", "我的空间根目录"
+
+
+def publish(code, folder=None):
+    """finalize 后发布: report.md → 飞书文档; 成功后清理中间产物(本地只留最终 report.md)。"""
+    ok, path = finalize(code)
+    if not ok or not path:
+        return False, None
+    code6 = str(code).split(".")[0]
+    pack = json.load(open(os.path.join(os.path.dirname(path), "pack.json"), encoding="utf-8"))
+    name, asof = pack.get("name") or code6, pack.get("asof") or date.today().isoformat()
+    folder_tok, src = resolve_folder(folder)
+    exp = "/tmp/ts_judge_publish_%s.md" % code6
+    open(exp, "w", encoding="utf-8").write(open(path, encoding="utf-8").read())
+    import subprocess
+    cmd = ('cd /tmp && "%s" drive +import --file %s --type docx '
+           '--name "%s(%s)十倍股判定 %s" --as user' %
+           (LARK, os.path.basename(exp), name, code6, asof))
+    if folder_tok:
+        cmd += ' --folder-token %s' % folder_tok
+    try:
+        p = subprocess.run(cmd, shell=True, capture_output=True, timeout=300)
+        out = (p.stdout or b"").decode("utf-8", "ignore")
+    except Exception as e:
+        print("飞书发布失败: %s" % str(e)[:120])
+        return False, None
+    url = ""
+    for line in out.splitlines():
+        if '"url"' in line:
+            url = line.split('"url":')[1].strip().strip('",')
+            break
+    base = os.path.dirname(path)
+    if url:
+        # 只保留最终结果: 清中间产物(素材包/判定/章节/研报清单), 留 report.md 与飞书链接
+        for f in ("pack.md", "pack.json", "texts.json", "verdict.json"):
+            try:
+                os.remove(os.path.join(base, f))
+            except Exception:
+                pass
         try:
-            v = json.load(open(PDF_CFG, encoding="utf-8")).get("pdf_dir")
-            if v:
-                return v, "持久配置"
+            import shutil
+            shutil.rmtree(os.path.join(base, "pdf"), ignore_errors=True)
         except Exception:
             pass
-    return DEFAULT_PDF_LIB, "默认(首次使用可 --pdf-dir 指定并记住)"
+        open(os.path.join(base, "feishu_url.txt"), "w", encoding="utf-8").write(url)
+        print("已发布(%s): %s" % (src, url))
+        print("本地仅保留 report.md + feishu_url.txt: %s" % base)
+    else:
+        print("飞书发布失败: %s" % ((p.stderr or b"").decode("utf-8", "ignore")[:160] or out[:160]))
+    return bool(url), url
 
 
 def degrade(fn, why):
