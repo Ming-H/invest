@@ -7,7 +7,9 @@ set -e
 REPO="git@github.com:Ming-H/invest.git"
 STAGE="$HOME/.claude/skill-repos/invest"
 DEST="${1:-/Users/z/Documents/work/.claude/skills}"
-SKILLS="earnings-reader a-share-review tenscreener jingshui can-slim lynch cninfo-disclosure"
+SKILLS="tasks/earnings-reader tasks/a-share-review stack/engine/tenscreener \
+stack/methodology/jingshui stack/methodology/can-slim stack/methodology/lynch \
+stack/data/cninfo-disclosure"
 
 # ① 暂存克隆 / 更新(嵌套结构完整保留在暂存区)
 if [ -d "$STAGE/.git" ]; then

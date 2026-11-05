@@ -952,8 +952,12 @@ def cmd_publish(a):
     exp = os.path.join(CACHE, "publish_%s.md" % m["tag"])
     with open(exp, "w", encoding="utf-8") as f:
         f.write(open(final, encoding="utf-8").read())
-    rc, out, err = run('cd %s && %s drive +import --file %s --type docx --name "%s" --as user'
-                       % (CACHE, LARK, os.path.basename(exp), name), timeout=300)
+    # 文档落点: cache/pool_base.json 的 doc_folder(2026-11-05 飞书目录规划: 财报阅读
+    # /A股复盘/十倍股判定 三流三目录), 未配置落根目录
+    doc_folder = _pool_cfg().get("doc_folder") or ""
+    rc, out, err = run('cd %s && %s drive +import --file %s --type docx --name "%s" %s --as user'
+                       % (CACHE, LARK, os.path.basename(exp), name,
+                          ('--folder-token ' + doc_folder) if doc_folder else ""), timeout=300)
     doc_url = ""
     for line in (out or "").splitlines():
         if '"url"' in line:

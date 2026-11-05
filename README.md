@@ -73,17 +73,22 @@ cd invest && ./install.sh          # 默认装到 ~/Documents/work/.claude/skill
 - **呈现**：红涨绿跌；金额亿元两位小数；所有报告页脚「非投资建议」
 - **可靠性哲学**：闸门与算术是确定性代码；LLM 只做枚举判定与受控转述，缺漏走保守兜底
 
-## 目录结构
+## 目录结构（v4 两平面：任务平面编排功能平面）
 
 ```
 invest/
 ├── README.md · ARCHITECTURE.md(族宪法) · CONVENTIONS.md(族口径) · install.sh
-├── earnings-reader/        # SKILL.md + scripts/{data,framework,pipeline}.py + tests/
-├── a-share-review/         # SKILL.md + scripts/{review,data,charts}.py
-├── tenscreener/            # scout/runner/watch/track
-├── jingshui/  can-slim/  lynch/          # 方法论(references + 范例)
-└── cninfo-disclosure/      # 巨潮/HKEX 下载底座
+├── tasks/                        # 任务平面(编排器)
+│   ├── earnings-reader/          #   季频任务: 读X月X日的财报(闸门→judge→入池)
+│   └── a-share-review/           #   日频任务: 复盘(盯盘+公告雷达+回检)
+└── stack/                        # 功能平面(四层栈)
+    ├── engine/tenscreener/       #   L4 判定引擎(judge/watch/track)
+    ├── methodology/              #   L3 方法论三典
+    │   ├── jingshui/  can-slim/  lynch/
+    └── data/cninfo-disclosure/   #   L1 文档底座(L2 结构化数据为族外官方技能)
 ```
+
+安装仍平铺到 skills/ 目录(Claude Code 只认平铺一层); 产出落飞书三目录(A股复盘/财报阅读/十倍股判定)。
 
 各技能的详细用法见其目录内 `SKILL.md`；架构决策记录见 `ARCHITECTURE.md`。
 
