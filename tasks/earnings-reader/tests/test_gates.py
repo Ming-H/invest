@@ -154,18 +154,27 @@ class TestRender(unittest.TestCase):
         self.assertIn("**金盘科技(688676.SH)** 营收+17.5% 扣非+13.8% → 同比未达40%。", md)
         self.assertIn("非投资建议", md)
 
+    def test_track_table_name(self):
+        """按季分表命名(对齐既有 26中报跟踪/26三季报跟踪)。"""
+        self.assertEqual(P.track_table_name("三季报", 2026), "26三季报跟踪")
+        self.assertEqual(P.track_table_name("中报", 2026), "26中报跟踪")
+        self.assertEqual(P.track_table_name("一季报", 2027), "27一季报跟踪")
+        self.assertEqual(P.track_table_name("年报", 2026), "26年报跟踪")
+
     def test_base_rows(self):
-        """Base 行: 代码带后缀, 同比数值化, 新建时档位/状态/首次纳入(人流转字段只在新建给)。"""
+        """季表行(字段规范沿用 26三季报跟踪): 裸代码/三线同比4季链/当季环比/L1档位/md链接。"""
         passed = self._passed()
-        rows = P.base_rows(passed, "2026-10-03 三季报监测日报", "https://x", ["2026-10-03", "2026-10-03"])
+        rows = P.base_rows(passed, "三季报监测日报 2026-10-15", "https://x", 2026, 3)
         d = rows[0]
-        self.assertEqual(d["股票代码"], "688380.SH")
+        self.assertEqual(d["代码"], "688380")               # 裸代码(不带后缀, 对齐既有)
         self.assertEqual(d["股票名称"], "中微半导")
-        self.assertEqual(d["营收同比%"], 50.0)
-        self.assertEqual(d["来源报告"], "2026-10-03 三季报监测日报")
-        self.assertEqual(d["报告链接"], "https://x")
-        self.assertNotIn("状态", d)          # 状态/首次纳入由 base_upsert 只在新建时补
-        self.assertEqual(d["归母同比%"], 150.0)  # 可算同比全写
+        self.assertEqual(d["营收同比4季"], "—→—→—→+50.0")   # 前三季基数缺失→—, 收于当季
+        self.assertEqual(d["归母同比4季"], "—→—→—→+150.0")
+        self.assertEqual(d["扣非同比4季"], "—→—→—→+144.4")
+        self.assertEqual(d["当季环比"], "+50.0 / +66.7 / +57.1")
+        self.assertEqual(d["L1档位"], "特档·双高")
+        self.assertEqual(d["报告链接"], "[三季报监测日报 2026-10-15](https://x)")
+        self.assertNotIn("首次纳入", d)                      # 首次纳入由 base_upsert 只在新建时补
 
 
 if __name__ == "__main__":

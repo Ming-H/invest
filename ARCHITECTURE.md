@@ -34,7 +34,7 @@
 
 | 技能 | 层 | 定位 | 输入 | 输出 | 明确不做 |
 |---|---|---|---|---|---|
-| earnings-reader | 引擎·**季频任务**(编排器) | 对指定日期披露跑单段式确定性流程(v3, 2026-11-05): ①40%三线闸门 ②近4季三线表 ③监测日报+台账入库 | 指定日期全市场披露 | 「重点跟踪标的」Base + 「财报记录」监测日报文档 | 不做判定(深判归 tenscreener judge); 不读财报正文/催化; 不处理业绩预告 |
+| earnings-reader | 引擎·**季频任务**(编排器) | 对指定日期披露跑单段式确定性流程(v3.2, 2026-11-05): ①40%三线闸门 ②近4季三线表 ③每天一份监测日报+台账按季分表入库 | 指定日期全市场披露 | 台账 Base 当季表(26三季报跟踪...缺表自动建) + 「财报记录」监测日报文档 | 不做判定(深判归 tenscreener judge); 不读财报正文/催化; 不处理业绩预告 |
 | tenscreener | 引擎·**判断权威**(工具+生命周期) | judge: 代码→判定(是否十倍候选/七阶段/TPS/三线形态/信号); 外加 runner 右侧扫描 + watch/track | 单代码/右侧全市场 | 判定JSON/亮灯名单/confirm/exit信号 | 不做全市场基本面初筛(scout 二期改读池); 不给指令 |
 | a-share-review | 引擎·**日频哨兵** | 池内标的价格/资金/事件 + 公告雷达解读(v2.3) + 回检 | 当日行情+watchlist+新公告 | 复盘文档/全息卡/E1预警/公告解读 | 不发现新标的; 不做判断(归 judge) |
 | jingshui | 方法论·总典 | 静水宪法(40%线/5不买/纪律)+六段式深读 | 问题/财报PDF | 框架/六段式报告 | 存标准不执行(执行归 judge) |
@@ -86,7 +86,7 @@
 | 日频复盘(a-share-review) | 「A股复盘」 | 各自 outputs/feishu_folder.json(历史机制) |
 | 季报阅读(earnings-reader) | 「财报记录」 | pipeline.py FEISHU 默认值(cache/feishu.json 可覆盖) |
 | 十倍股判定(tenscreener judge) | 「十倍股判定」 | cache/config.json 的 judge_folder |
-| earnings-reader 台账 | 「重点跟踪标的」Base(在财报记录文件夹内, 2026-11-05 用户指定) | 同上 pipeline.py FEISHU |
+| earnings-reader 台账 | 台账 Base 内**每季一张表**（26三季报跟踪/27一季报跟踪...缺表自动建, 字段沿用 26三季报跟踪 规范） | 同上 pipeline.py FEISHU |
 | 标的池 Base | 我的空间根目录 | cache/pool_base.json(跨引擎唯一真源; earnings-reader v3 起不再写此表) |
 
 「投资相关」为历史存档目录(h1-monitor 时代监测日报), 不再新增。「财报记录」原为历史存档, 2026-11-05 用户指定改为季报阅读文档落点。新建文件夹需用户明示。

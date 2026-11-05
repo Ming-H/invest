@@ -4,11 +4,12 @@
 
 流程(全确定性, 无模型判定, 不读财报正文):
   指定日期披露清单 -> 营收/归母/扣非 单季同比>40% 闸门 -> 近4季三线表(金额/同比/环比)
-  -> 监测日报 markdown -> --publish: 飞书文档(「财报记录」文件夹) + 重点跟踪标的 Base upsert
+  -> 监测日报 markdown -> --publish: 飞书文档(「财报记录」文件夹, 每天一份) + 台账 Base
+     按季分表 upsert(26三季报跟踪/27一季报跟踪..., 缺表自动按模板新建)
 
 历史: h1-monitor v7.3 -> v2 三段式(draft/Claude判定/finalize, 2026-11-04, 已退役)
-  -> v3 单段式(2026-11-05: 判定/L2/业绩预告/催化全删; 台账切「重点跟踪标的」表;
-     文档对齐历史「{季}报监测日报」系列格式)。
+  -> v3 单段式(2026-11-05: 判定/L2/业绩预告/催化全删; 文档对齐「{季}报监测日报」系列;
+     v3.2 台账按季分表, 字段规范沿用 26三季报跟踪: 代码/三线同比4季链/当季环比/L1档位)。
 
 用法:
   pipeline.py --date 2026-10-03                 # 出 final.md(不发飞书)
@@ -34,11 +35,13 @@ OUTROOT = os.path.join(ROOT, "outputs")
 CACHE = os.path.join(ROOT, "cache")
 DONE = os.path.join(CACHE, "processed.json")           # 幂等台账
 
-# 飞书落点(2026-11-05 用户指定; cache/feishu.json 可覆盖)
-FEISHU = {"track_base": "J8RGbNZobaXu9VsqtFWcKUemnQe",   # 重点跟踪标的
-          "track_table": "tblpQXsYDpVfIhUD",
+# 飞书落点(2026-11-05 用户定版: 按季分表; cache/feishu.json 可覆盖)
+FEISHU = {"track_base": "J8RGbNZobaXu9VsqtFWcKUemnQe",   # 台账 Base(每季一张表)
           "doc_folder": "AXJlff1ogl42bLdUarccrWGFn8g"}   # 财报记录
 CFG_FILE = os.path.join(CACHE, "feishu.json")
+# 台账表字段模板(字段命名沿用 26三季报跟踪 既有规范; 新季表按此自动创建)
+TRACK_FIELDS = ["代码", "股票名称", "营收同比4季", "归母同比4季", "扣非同比4季",
+                "当季环比", "L1档位", "首次纳入", "报告链接"]
 
 TH, HI_Y, HI_Q = 40.0, 100.0, 50.0
 MIN_PROFIT = 5e7            # R2.5: 扭亏类当季归母下限(0.5亿)
@@ -341,53 +344,105 @@ def publish_doc(final_path, title):
     return ""
 
 
-def base_rows(passed, src_label, doc_url, window):
-    """passed -> Base 行(字段对齐「重点跟踪标的」表既有命名)。
-    更新不覆盖 状态/首次纳入(人流转字段)。-> [{字段: 值}]"""
+def track_table_name(season, y):
+    """按季分表名: 26三季报跟踪 / 27一季报跟踪 ...(对齐既有命名)。y=报告期年份。"""
+    return "%d%s跟踪" % (y % 100, season)
+
+
+def resolve_track_table(season, y):
+    """季表解析: 按名找, 缺则按 TRACK_FIELDS 模板新建。-> (base_token, table_id)"""
+    cfg = _cfg()
+    base, name = cfg["track_base"], track_table_name(season, y)
+    rc, out, _ = run("%s base +table-list --base-token %s --as user --format json"
+                     % (LARK, base), timeout=60)
+    try:
+        d = json.loads(out[out.index("{"):])
+        for t in (d.get("data", {}).get("tables") or []):
+            if t.get("name") == name:
+                return base, t.get("id") or ""
+    except Exception:
+        pass
+    fields = "'" + json.dumps([{"field_name": f, "type": "text"} for f in TRACK_FIELDS],
+                              ensure_ascii=False).replace("'", "'\\''") + "'"
+    rc, out, err = run("%s base +table-create --base-token %s --name '%s' --fields %s "
+                       "--as user --format json" % (LARK, base, name, fields), timeout=120)
+    tid = ""
+    try:
+        d = json.loads(out[out.index("{"):])
+        tid = (d.get("data") or {}).get("table_id") or ""
+    except Exception:
+        pass
+    if tid:
+        log("⑥b 新建季表「%s」: %s" % (name, tid))
+    else:
+        log("  ⚠ 季表「%s」新建失败: %s" % (name, (err or out or "")[:150]))
+    return base, tid
+
+
+def _series4(qq, cols, ind):
+    """4季同比链 '+33.4→+18.5→+25.7→+57.8'(旧→新, 收于当季); 不可算→'—'。"""
+    parts = []
+    for k in cols:
+        yv = pct((qq.get(k) or {}).get(ind), (qq.get(yoy_of(k)) or {}).get(ind))
+        parts.append(("%+.1f" % yv) if yv is not None else "—")
+    return "→".join(parts)
+
+
+def base_rows(passed, doc_label, doc_url, y, q):
+    """passed -> 季表行(字段命名沿用 26三季报跟踪 既有规范)。
+    首次纳入只在新build时由 base_upsert 补(人流转字段, 更新不覆盖)。"""
+    cols = display_quarters(y, q)
+    cur_l = cols[-1]
     rows = []
     for e in passed:
-        yoy = {k: yv for k, yv, _ in e.get("checks", []) if yv is not None}
-        d = {"股票代码": data._secu(e["code"]), "股票名称": e["name"], "来源报告": src_label,
-             "更新日期": window[1]}
-        m = {"营收同比%": yoy.get("rev"), "归母同比%": yoy.get("np"), "扣非同比%": yoy.get("ded")}
-        for k, v in m.items():
-            if v is not None:
-                d[k] = round(v, 2)
+        qq = e.get("q") or {}
+        cur = qq.get(cur_l) or {}
+        qoqs = []
+        for k, _ in INDS:                       # 当季环比: 营收/归母/扣非
+            qv = pct(cur.get(k), (qq.get(qoq_of(cur_l)) or {}).get(k))
+            qoqs.append(("%+.1f" % qv) if qv is not None else "—")
+        d = {"代码": e["code"], "股票名称": e["name"],
+             "营收同比4季": _series4(qq, cols, "rev"),
+             "归母同比4季": _series4(qq, cols, "np"),
+             "扣非同比4季": _series4(qq, cols, "ded"),
+             "当季环比": " / ".join(qoqs),
+             "L1档位": TIER_LABEL[e["tier"]]}
         if doc_url:
-            d["报告链接"] = doc_url
+            d["报告链接"] = "[%s](%s)" % (doc_label, doc_url)
         rows.append(d)
     return rows
 
 
-def base_upsert(passed, src_label, doc_url, window):
-    """upsert by 股票代码: record-list 拉码->rid, 新建缺失/更新已有。-> 写入条数"""
+def base_upsert(passed, doc_label, doc_url, window, season, y, q):
+    """upsert by 代码: record-list 拉码->rid, 新建缺失/更新已有。-> 写入条数"""
     cfg = _cfg()
-    base, table = cfg["track_base"], cfg["track_table"]
+    base, table = resolve_track_table(season, y)
+    if not table:
+        log("  ⚠ 季表不可用, 跳过 Base 写入")
+        return 0
     nd = os.path.join(CACHE, "track_list.ndjson")
     run('cd %s && %s base +record-list --base-token %s --table-id %s '
-        '--field-id 股票代码 --format ndjson --output %s --overwrite --as user'
+        '--field-id 代码 --format ndjson --output %s --overwrite --as user'
         % (CACHE, LARK, base, table, os.path.basename(nd)), timeout=60)
     have = {}
     try:
         for ln in open(nd, encoding="utf-8"):
             r = json.loads(ln)
-            c = str(r.get("股票代码") or "").split(".")[0].strip()
+            c = str(r.get("代码") or "").strip()
             if c and r.get("record_id"):
                 have[c] = r["record_id"]
     except Exception:
         pass
-    rows = base_rows(passed, src_label, doc_url, window)
+    rows = base_rows(passed, doc_label, doc_url, y, q)
     creates, updates = [], {}
     for d in rows:
-        c = d["股票代码"].split(".")[0]
-        if c in have:
-            updates[have[c]] = d
+        if d["代码"] in have:
+            updates[have[d["代码"]]] = d
         else:
             d2 = dict(d)
-            d2["档位"] = ["第一档>40%"]      # 既有 select 选项(2026-11-05 核对)
-            d2["状态"] = ["跟踪中"]
             d2["首次纳入"] = window[1]
             creates.append(d2)
+
     def _sh(payload):
         return "'" + json.dumps(payload, ensure_ascii=False).replace("'", "'\\''") + "'"
     written = 0
@@ -510,9 +565,9 @@ def cmd_run(a):
         return 0
     doc_url = publish_doc(final, title)
     log("⑥ 飞书文档: " + (doc_url or "失败"))
-    src_label = "%s %s" % (start if start == end else end, title.rsplit(" ", 1)[0])
-    written = base_upsert(passed, src_label, doc_url, machine["window"]) if passed else 0
-    log("⑦ 重点跟踪标的 Base: 写入%d" % written)
+    doc_label = title.rsplit("(", 1)[0]        # 「三季报监测日报 2026-10-15」
+    written = base_upsert(passed, doc_label, doc_url, machine["window"], season, y, q) if passed else 0
+    log("⑦ 季表[%s]: 写入%d" % (track_table_name(season, y), written))
     for e in passed:                          # 幂等台账: 发布成功才落账
         done.add((e["code"], e.get("nd") or start))
     save_done(done)
