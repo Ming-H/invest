@@ -1,0 +1,766 @@
+#!/usr/bin/env python3
+"""
+judge.py — tenscreener 单标的十倍股判定引擎（v3 判断权威, 2026-11-05）。
+
+定位（族宪法 v3）：给一个代码，产「判定素材包」→ Claude 读包 + jingshui/can-slim/lynch
+三方法论标准 → 写 verdict.json → finalize 校验并组装报告。判定内核复用现有零件:
+  emoney(F10三线/预告) + quarters(序列分析) + runner(七阶段分类) + scorer(TPS数字因子)
+新增的是「读财报」维度(两厚两薄报告章节抽取)与九类关注内容的免费取数(零问财额度):
+  资产负债表先行(合同负债/存货/货币资金/有息负债/商誉) + 主营构成(分业务/地区)
+  + 十大流通股东进退 + 股东户数趋势 + 经营评述 + 价格位置 + 大盘β(免费K线版)
+
+用法(三段式, 经 cli.py judge 入口):
+  python3 scripts/cli.py judge --code 603259            # ① 取数+素材包 pack.md/pack.json
+  (Claude 读 pack.md → 写同目录 verdict.json)            # ② 判定(对话内)
+  python3 scripts/cli.py judge --code 603259 --finalize # ③ 校验+组装 report.md
+
+全免费源: 东财 F10/资产负债表/股东/估值 + emweb 主营构成/经营评述 + 腾讯K线 + 巨潮PDF。
+"""
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+from datetime import date, datetime
+
+from emoney import (f10_periods, predicts, forecast_signal)
+from quarters import latest_report_period, last_n_quarters, q_label, q_cn, analyze_quarterly
+import kline
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUTROOT = os.path.join(os.path.dirname(HERE), "outputs", "judge")
+SEC_HOST = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
+UA = {"User-Agent": "Mozilla/5.0", "Referer": "https://data.eastmoney.com"}
+
+# cninfo-disclosure 底座 cli 的探测位置(同 flow.py 先例: 同级技能优先)
+CNINFO_CLI_CANDIDATES = [
+    os.path.join(os.path.dirname(HERE), "cninfo-disclosure", "scripts", "cli.py"),
+    os.path.expanduser("~/Documents/work/.claude/skills/cninfo-disclosure/scripts/cli.py"),
+    os.path.expanduser("~/.claude/skills/cninfo-disclosure/scripts/cli.py"),
+]
+
+DEGRADED = []
+
+
+def degrade(fn, why):
+    DEGRADED.append((fn, why))
+
+
+def _secu(code):
+    code = str(code).split(".")[0]
+    return code + (".SH" if code[0] in ("6", "9") else ".BJ" if code[0] in ("4", "8") else ".SZ")
+
+
+def _http_json(url, referer="https://data.eastmoney.com", timeout=15):
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Referer": referer})
+    return json.loads(urllib.request.urlopen(req, timeout=timeout).read().decode())
+
+
+def _sec_rows(report, code, sort="REPORT_DATE", extra_filter=None):
+    """datacenter(securities) host 通用取数(FREEHOLDERS/HOLDERNUM/GBALANCE 实测可用)。"""
+    p = {"reportName": report, "columns": "ALL", "pageSize": 40, "pageNumber": 1,
+         "sortColumns": sort, "sortTypes": -1, "filter": '(SECUCODE="%s")' % _secu(code)}
+    if extra_filter:
+        p["filter"] = extra_filter
+    u = SEC_HOST + "?" + urllib.parse.urlencode(p)
+    try:
+        d = _http_json(u)
+        time.sleep(0.12)
+        return (d.get("result") or {}).get("data") or []
+    except Exception as e:
+        degrade("_sec_rows", "%s %s" % (report, str(e)[:60]))
+        return []
+
+
+def _f(v, div=None):
+    if v is None:
+        return None
+    return round(v / div, 2) if div else round(v, 2)
+
+
+def _yi(v):
+    return _f(v, 1e8) if isinstance(v, (int, float)) else None
+
+
+# ============ ① 报告期定位: 最近4份(两厚两薄) ============
+
+def four_reports(code):
+    """-> [(y,q,label,厚/薄)]。厚=半年报/年报(含MD&A/募投/风险), 薄=一季报/三季报。
+    以 F10 实际披露过的报告期为准(未披露的不取)。"""
+    periods = sorted(f10_periods(code), key=lambda s: (s[:4], s[-1]))
+    latest = periods[-1] if periods else q_label(*latest_report_period())
+    take = last_n_quarters((int(latest[:4]), int(latest[-1])), 4)
+    out = []
+    for y, q in take:
+        lbl = q_label(y, q)
+        out.append({"y": y, "q": q, "label": lbl, "cn": q_cn(y, q),
+                    "thick": q in (2, 4), "has_data": lbl in periods})
+    return out, periods
+
+
+# ============ ② 三线序列(F10免费链) → quarters 分析结构 ============
+
+def three_line_qs(code):
+    """F10 累计 → 单季同比 → quarters.analyze_quarterly 的 qs 结构。"""
+    sys.path.insert(0, HERE)
+    from emoney import cum_singles, yoy_from_periods
+    periods = f10_periods(code)
+    yoy = yoy_from_periods(periods)
+    singles = cum_singles(periods)
+    qs = {"rev_yoy": {}, "parent_yoy": {}, "deduct_yoy": {}, "periods": sorted(yoy), "latest_period": None}
+    for lbl, (r, p, d) in yoy.items():
+        qs["rev_yoy"][lbl] = r
+        qs["parent_yoy"][lbl] = p
+        qs["deduct_yoy"][lbl] = d
+    qs["latest_period"] = qs["periods"][-1] if qs["periods"] else None
+    return qs, singles, periods
+
+
+def qoq_table(singles, n=4):
+    """近 n 季单季金额 + 同比 + 环比(环比含季节噪声, 只呈现供参考)。"""
+    labels = sorted(singles)[-n:]
+
+    def qoq(lbl, i):
+        if lbl not in singles or i == 0:
+            return (None, None, None)
+        prev = labels[i - 1]
+        row = []
+        for v, b in zip(singles[lbl], singles.get(prev, (None, None, None))):
+            row.append(round((v / b - 1) * 100, 1) if (v is not None and b is not None and b > 0) else None)
+        return tuple(row)
+
+    out = []
+    for i, lbl in enumerate(labels):
+        yoyr = None
+        out.append({"label": lbl, "single_yi": tuple(_yi(v) for v in singles.get(lbl, (None,) * 3)),
+                    "qoq": qoq(lbl, i)})
+    return out, labels
+
+
+def quality_rows(code):
+    """F10 同表质地: 毛利率(累计)趋势 / ROE / 负债率 / 净现比。"""
+    from emoney import _get
+    rows = _get("RPT_F10_FINANCE_MAINFINADATA", code)
+    ml, out = {}, []
+    for r in rows:
+        rd = (r.get("REPORT_DATE") or "")[:10]
+        if not rd:
+            continue
+        y, m = int(rd[:4]), int(rd[5:7])
+        q = {3: 1, 6: 2, 9: 3, 12: 4}.get(m)
+        if not q:
+            continue
+        if r.get("XSMLL") is not None:
+            ml["%dQ%d" % (y, q)] = r["XSMLL"]
+        out.append({"label": "%dQ%d" % (y, q), "roe": r.get("ROEJQ"), "roic": r.get("ROIC"),
+                    "debt": r.get("ZCFZL"),
+                    "ncf_np": (r["NCO_NETPROFIT"] * 100) if isinstance(r.get("NCO_NETPROFIT"), (int, float)) else None})
+    out.sort(key=lambda x: x["label"])
+    return {"ml_trend": sorted(ml.items()), "latest": out[-1] if out else {}}
+
+
+# ============ ③ 资产负债表先行信号 / 股东筹码 / 主营构成 ============
+
+BAL_FIELDS = (("CONTRACT_LIAB", "合同负债"), ("CONTRACT_ASSET", "合同资产"),
+              ("INVENTORY", "存货"), ("MONETARYFUNDS", "货币资金"),
+              ("SHORT_LOAN", "短期借款"), ("LONG_LOAN", "长期借款"),
+              ("ACCOUNTS_RECE", "应收账款"), ("GOODWILL", "商誉"))
+
+
+def balance_leads(code, n=5):
+    """近 n 报告期先行信号表。有息负债=短借+长借。"""
+    rows = _sec_rows("RPT_F10_FINANCE_GBALANCE", code)[:n * 2]
+    out = []
+    for r in rows:
+        rd = (r.get("REPORT_DATE") or "")[:10]
+        y, m = int(rd[:4]), int(rd[5:7]) if len(rd) >= 7 else (None, None)
+        q = {3: 1, 6: 2, 9: 3, 12: 4}.get(m)
+        if not q:
+            continue
+        debt = sum(v for v in (r.get("SHORT_LOAN"), r.get("LONG_LOAN")) if isinstance(v, (int, float)))
+        out.append({"label": "%dQ%d" % (y, q),
+                    **{cn: _yi(r.get(k)) for k, cn in BAL_FIELDS},
+                    "有息负债": _yi(debt) if debt else 0.0})
+        if len(out) >= n:
+            break
+    return out
+
+
+def holders_shift(code):
+    """十大流通股东最新两期 diff(新进/退出/增减) + 股东户数近5期趋势。"""
+    fh = _sec_rows("RPT_F10_EH_FREEHOLDERS", code)[:12]
+    by_end = {}
+    for r in fh:
+        by_end.setdefault((r.get("END_DATE") or "")[:10], []).append(r)
+    ends = sorted(by_end, reverse=True)[:2]
+    diff = None
+    if len(ends) == 2:
+        cur = {r.get("HOLDER_NAME"): r for r in by_end[ends[0]]}
+        prev = {r.get("HOLDER_NAME"): r for r in by_end[ends[1]]}
+        diff = {"period": [ends[1], ends[0]], "new": [], "exit": [], "change": []}
+        for nm, r in cur.items():
+            if nm not in prev:
+                diff["new"].append(nm)
+            else:
+                a, b = r.get("HOLD_NUM"), prev[nm].get("HOLD_NUM")
+                if isinstance(a, (int, float)) and isinstance(b, (int, float)) and b > 0:
+                    chg = (a / b - 1) * 100
+                    if abs(chg) >= 15:
+                        diff["change"].append("%s %+.0f%%" % (nm[:16], chg))
+        diff["exit"] = [nm for nm in prev if nm not in cur]
+    hn = _sec_rows("RPT_F10_EH_HOLDERNUM", code)[:6]
+    trend = [( (r.get("END_DATE") or "")[:10], _f(r.get("HOLDER_TOTAL_NUM"), 1e4)) for r in hn]
+    return {"top10_diff": diff, "holders_wan": trend[:5]}
+
+
+def main_composition(code, thick_labels):
+    """emweb 主营构成: 取最近厚报告期 + 上年同期(分业务/分地区, 收入占比与毛利率)。"""
+    try:
+        d = _http_json("https://emweb.securities.eastmoney.com/PC_HSF10/BusinessAnalysis/PageAjax?code="
+                       + ("SH" if str(code)[0] in "69" else ("BJ" if str(code)[0] in "48" else "SZ")) + str(code).split(".")[0],
+                       referer="https://emweb.securities.eastmoney.com/")
+    except Exception as e:
+        degrade("main_composition", str(e)[:60])
+        return {}
+    rows = d.get("zygcfx") or []
+    want = set()
+    for lbl in thick_labels:
+        y = int(lbl[:4])
+        want.add("%d-12-31" % y if lbl[-1] == "4" else "%d-06-30" % y)
+        want.add("%d-12-31" % (y - 1) if lbl[-1] == "4" else "%d-06-30" % (y - 1))
+    out = []
+    for r in rows:
+        rd = (r.get("REPORT_DATE") or "")[:10]
+        if rd in want:
+            gm = r.get("GROSS_RPOFIT_RATIO")
+            out.append({"period": rd, "dim": {1: "按业务", 2: "按产品", 3: "按地区"}.get(r.get("MAINOP_TYPE"), str(r.get("MAINOP_TYPE"))),
+                        "item": r.get("ITEM_NAME"), "rev_yi": _yi(r.get("MAIN_BUSINESS_INCOME")),
+                        "share_pct": _f(r.get("MBI_RATIO"), 1), "gm_pct": _f(gm, 0.01) if isinstance(gm, (int, float)) and gm <= 1 else gm})
+    if not out:
+        have = sorted(set((r.get("REPORT_DATE") or "")[:10] for r in rows))[-3:]
+        degrade("main_composition", "无匹配期(取最近: %s)" % ", ".join(have))
+    return {"rows": out, "jyps": [((r.get("REPORT_DATE") or "")[:10], r.get("BUSINESS_REVIEW"))
+                                  for r in (d.get("jyps") or [])]}
+
+
+# ============ ④ 行情快照 / 价格位置 / 大盘β(全免费) ============
+
+def quote(code):
+    secid = ("1." if str(code)[0] in "69" else "0.") + str(code).split(".")[0]
+    try:
+        d = _http_json("https://push2.eastmoney.com/api/qt/ulist.np/get?"
+                       + urllib.parse.urlencode({"secids": secid, "fields": "f12,f14,f2,f3,f9,f20,f21",
+                                                 "ut": "fa5fd1943c7b386f172d6893dbfba10b"}))
+        it = ((d.get("data") or {}).get("diff") or [{}])[0]
+        return {"name": it.get("f14"), "price": (it.get("f2") / 100) if isinstance(it.get("f2"), (int, float)) else None,
+                "mcap_yi": _yi(it.get("f20")), "pe": (it.get("f9") / 100) if isinstance(it.get("f9"), (int, float)) else None}
+    except Exception as e:
+        degrade("quote", str(e)[:60])
+        return {}
+
+
+def price_metrics(code):
+    """腾讯日K(约4年) → runner 所需 m(series_metrics) + 3年低点倍数 + 年内涨幅。"""
+    from runner import to_symbol
+    sym = to_symbol(str(code).split(".")[0] + (".SH" if str(code)[0] in "69" else ".SZ"))
+    end = date.today().isoformat()
+    beg = "%d-01-01" % (date.today().year - 4)
+    rows = kline.fetch_qfq(sym, beg, end)
+    if not rows:
+        degrade("price_metrics", "K线无数据")
+        return {}, []
+    m = kline.series_metrics(rows, window=250)
+    closes = [(r[0], float(r[2])) for r in rows]
+    if closes:
+        last = closes[-1][1]
+        three_y = "%d-01-01" % (date.today().year - 3)
+        lows = [c for d, c in closes if d >= three_y]
+        base = next((c for d, c in closes if d >= "%d-01-01" % date.today().year), None)
+        m["realized_3y"] = round(last / min(lows), 2) if lows else None
+        m["ytd_pct"] = round((last / base - 1) * 100, 1) if base else None
+    return m, closes[-5:]
+
+
+def market_gate_free():
+    """大盘β(免费版): 上证日K close vs MA250。on/off/unknown。
+    (monitor.market_gate 走问财花额度; judge 全免费原则下用K线自算, 口径一致=年线β)"""
+    rows = kline.fetch_qfq("sh000001", "%d-01-01" % (date.today().year - 2), date.today().isoformat())
+    closes = [float(r[2]) for r in rows]
+    if len(closes) < 250:
+        return {"verdict": "unknown", "method": "no_data"}
+    ma = sum(closes[-250:]) / 250.0
+    v = "on" if closes[-1] >= ma else "off"
+    return {"verdict": v, "method": "ma250(免费K线)", "close": closes[-1], "ma250": round(ma, 1)}
+
+
+# ============ ⑤ 报告正文(两厚两薄 PDF → 章节) ============
+
+def _cninfo_cli():
+    for p in CNINFO_CLI_CANDIDATES:
+        if os.path.exists(p):
+            return p
+    return None
+
+
+TYPE_BY_Q = {1: "q1", 2: "semi", 3: "q3", 4: "annual"}
+
+
+def fetch_report_texts(code, name, reports, outdir):
+    """经 cninfo-disclosure 底座下载最近4份财报 → pdftotext → 切章节。
+    返回 [{label, cn, thick, chapters:{mda/募投/风险/非经常/股东: text}}]。"""
+    cli = _cninfo_cli()
+    if not cli:
+        degrade("fetch_report_texts", "cninfo-disclosure cli 未找到(探测: %s)" % "; ".join(CNINFO_CLI_CANDIDATES[:2]))
+        return []
+    pdfdir = os.path.join(outdir, "pdf")
+    os.makedirs(pdfdir, exist_ok=True)
+    out = []
+    for rp in reports:
+        if not rp.get("has_data"):
+            continue
+        ok_txt = None
+        for attempt in (1, 2):        # 巨潮限速(连发多份时间歇拦截) -> 间歇重试一次
+            try:
+                before = set(os.listdir(pdfdir))
+                p = subprocess.run([sys.executable, cli, "download", "--stock", str(code).split(".")[0],
+                                    "--year", str(rp["y"]), "--type", TYPE_BY_Q[rp["q"]],
+                                    "-o", pdfdir, "--timeout", "30"],
+                                   capture_output=True, timeout=180, cwd=pdfdir)
+                # cli 的 downloaded 字段不是可靠路径(实测返回 1) -> 按目录差集找新 PDF(免疫输出形态)
+                new = sorted((f for f in set(os.listdir(pdfdir)) - before if f.lower().endswith(".pdf")),
+                             key=lambda f: -os.path.getmtime(os.path.join(pdfdir, f)))
+                if not new:
+                    if attempt == 1:
+                        time.sleep(3)
+                        continue
+                    degrade("fetch_report_texts", "%s 下载失败: %s"
+                            % (rp["cn"], (p.stderr or b"").decode("utf-8", "ignore")[:80]))
+                    break
+                path = os.path.join(pdfdir, new[0])
+                txt = _pdf_text(path)
+                if not txt:
+                    os.remove(path)
+                    if attempt == 1:
+                        time.sleep(2)
+                        continue
+                    degrade("fetch_report_texts", "%s 转文本失败" % rp["cn"])
+                    break
+                ok_txt = (rp, txt, path)
+                break
+            except Exception as e:
+                if attempt == 2:
+                    degrade("fetch_report_texts", "%s: %s" % (rp["cn"], str(e)[:70]))
+        if ok_txt:
+            rp2, txt, path = ok_txt
+            out.append({"label": rp2["label"], "cn": rp2["cn"], "thick": rp2["thick"],
+                        "chapters": _split_chapters(txt, thick=rp2["thick"])})
+            os.remove(path)
+        time.sleep(1.0)
+    return out
+
+
+def _pdf_text(path, max_pages=120):
+    try:
+        t = path + ".txt"
+        p = subprocess.run(["pdftotext", "-layout", "-l", str(max_pages), path, t],
+                           capture_output=True, timeout=120)
+        if p.returncode == 0 and os.path.exists(t) and os.path.getsize(t) > 500:
+            return open(t, encoding="utf-8", errors="ignore").read()
+    except Exception:
+        pass
+    finally:
+        try:
+            os.remove(path + ".txt")
+        except Exception:
+            pass
+    return None
+
+
+_SEC_RE = re.compile(r"第[一二三四五六七八九十]+节")
+_CHAPTER_MARKS = {
+    "mda": re.compile(r"管理层讨论与分析|经营情况讨论与分析"),
+    "risk": re.compile(r"可能面对的风险|可能面临的风险|风险因素及对策"),
+    "nonrec": re.compile(r"非经常性损益项目及金额|非经常性损益"),
+    "holder": re.compile(r"股份变动及股东情况|股东信息|股东情况"),
+}
+
+
+def _slice(text, mark, cap, min_len=400):
+    """切章节。年报目录页也有章节标题(后跟 .... 页码) —— 命中切片过短时跳过找下一个
+    匹配位; 全部命中都短(如天然短小的股东章节)时回退【最长】命中而非第一个
+    (实测: 药明年报 MD&A 首命中只有121字目录条目; 股东章节正文仅40字仍须取正文)。"""
+    best = ""
+    for m in mark.finditer(text):
+        nxt = _SEC_RE.search(text, m.end())
+        seg = text[m.start():nxt.start() if nxt else min(m.end() + cap * 3, len(text))]
+        if len(seg) >= min_len:
+            return seg[:cap]
+        if len(seg) > len(best):
+            best = seg
+    return best[:cap]
+
+
+def _split_chapters(txt, thick):
+    """厚报告切 5 章; 薄报告全文截断(本就短) + 股东章。"""
+    if not thick:
+        holder = _slice(txt, _CHAPTER_MARKS["holder"], 2500)
+        body = txt[:7000]
+        return {"全文摘要": body, "股东章节": holder or "(未定位)"}
+    mda = _slice(txt, _CHAPTER_MARKS["mda"], 12000)
+    risk = _slice(txt, _CHAPTER_MARKS["risk"], 4000)
+    nonrec = _slice(txt, _CHAPTER_MARKS["nonrec"], 2500)
+    holder = _slice(txt, _CHAPTER_MARKS["holder"], 2500)
+    # 募投: 全文定位(药明等公司放"重要事项"节而非 MD&A 内)
+    m2 = re.search(r"募集资金使用情况|募集资金投向|募集资金的具体使用", txt)
+    mipu = txt[m2.start():m2.start() + 5000] if m2 else ""
+    return {"管理层讨论": mda or "(未定位)", "募投情况": mipu or "(未定位)",
+            "风险章节": risk or "(未定位)", "非经常明细": nonrec or "(未定位)",
+            "股东章节": holder or "(未定位)"}
+
+
+def consensus(code, outdir):
+    """券商一致预期(经 cninfo-disclosure 研报模块, 东财免费源): 近12月研报数/评级分布/
+    最新盈利预测(EPS→预期PE)。jingshui 六段式第五段(机构一致预期与估值)的素材。"""
+    import csv
+    cli = _cninfo_cli()
+    code6 = str(code).split(".")[0]
+    if not cli:
+        return {}
+    try:
+        p = subprocess.run([sys.executable, cli, "download", "--stock", code6,
+                            "--type", "research", "-o", outdir, "--timeout", "30"],
+                           capture_output=True, timeout=120)
+        info = json.loads((p.stdout or b"").decode("utf-8", "ignore"))
+    except Exception as e:
+        degrade("consensus", str(e)[:60])
+        return {}
+    csv_path = info.get("csv") or (info.get("data") or {}).get("csv") if isinstance(info.get("data"), dict) else info.get("csv")
+    if not csv_path or not os.path.exists(csv_path):
+        degrade("consensus", "研报清单未生成")
+        return {}
+    try:
+        rows = list(csv.DictReader(open(csv_path, encoding="utf-8-sig")))
+    except Exception as e:
+        degrade("consensus", "CSV解析: %s" % str(e)[:50])
+        return {}
+    if not rows:
+        return {}
+    def col(row, *names):
+        for n in names:
+            for k in row:
+                if n in str(k):
+                    return row.get(k)
+        return None
+    ratings = {}
+    eps_recent = []
+    for r in rows:
+        rt = col(r, "评级") or ""
+        for key in ("买入", "增持", "推荐", "中性", "持有", "卖出"):
+            if key in rt:
+                ratings[key] = ratings.get(key, 0) + 1
+                break
+        eps = col(r, "预测年每股收益", "预测EPS", "EPS")
+        yr = col(r, "预测年份", "年度")
+        if eps:
+            try:
+                eps_recent.append((str(yr or ""), float(eps)))
+            except ValueError:
+                pass
+    out = {"reports_12m": len(rows),
+           "orgs": len(set(col(r, "机构", "来源") for r in rows if col(r, "机构", "来源"))),
+           "ratings": ratings,
+           "eps_forecasts": eps_recent[-6:],
+           "latest_date": max((str(col(r, "日期") or "") for r in rows), default="")}
+    try:
+        os.remove(csv_path)
+    except Exception:
+        pass
+    return out
+
+
+# ============ ⑥ 素材包渲染 ============
+
+def build_pack(code, outdir):
+    """全量取数 → pack.json + pack.md。返回 (pack, outdir) 或 (None, errors)。"""
+    os.makedirs(outdir, exist_ok=True)
+    q = quote(code)
+    code6 = str(code).split(".")[0]
+    name = q.get("name") or code6
+    reports, all_periods = four_reports(code6)
+    thick_labels = [r["label"] for r in reports if r["thick"]]
+
+    qs, singles, periods = three_line_qs(code6)
+    ana = analyze_quarterly(qs) if qs.get("latest_period") else None
+    qt, qlabels = qoq_table(singles)
+    qual = quality_rows(code6)
+    bal = balance_leads(code6)
+    hold = holders_shift(code6)
+    comp = main_composition(code6, thick_labels)
+    m, recent_closes = price_metrics(code6)
+    gate = market_gate_free()
+    fc = None
+    try:
+        pr = predicts(code6)
+        if pr:
+            fc = forecast_signal(periods, pr, date.today().isoformat())
+    except Exception:
+        pass
+
+    # 阶段预判(runner.classify_phase, 纯函数)
+    stage_pre = None
+    if ana and m:
+        from runner import classify_phase
+        stage_pre = classify_phase(m, ana, gate.get("verdict"), forecast=fc)
+    texts = fetch_report_texts(code6, name, reports, outdir)
+    cons = consensus(code6, outdir)
+
+    pack = {"code": code6, "name": name, "asof": date.today().isoformat(),
+            "quote": q, "reports": [{k: r[k] for k in ("label", "cn", "thick", "has_data")} for r in reports],
+            "qs": qs, "analysis": ana, "quarterly_table": qt,
+            "quality": qual, "balance_leads": bal, "holders": hold,
+            "composition": comp, "price": m, "market_gate": gate,
+            "forecast": fc, "stage_pre": stage_pre, "consensus": cons,
+            "report_texts_meta": [{k: t[k] for k in ("label", "cn", "thick")} for t in texts],
+            "degraded": DEGRADED}
+    json.dump(pack, open(os.path.join(outdir, "pack.json"), "w", encoding="utf-8"),
+              ensure_ascii=False, indent=1)
+    md = _render_pack_md(pack, texts)
+    open(os.path.join(outdir, "pack.md"), "w", encoding="utf-8").write(md)
+    with open(os.path.join(outdir, "texts.json"), "w", encoding="utf-8") as f:
+        json.dump(texts, f, ensure_ascii=False, indent=1)
+    return pack, outdir
+
+
+def _tbl(headers, rows):
+    return ["| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)] + \
+           ["| " + " | ".join(str(c) if c is not None else "—" for c in r) + " |" for r in rows]
+
+
+def _fmt_yoy(v):
+    return ("%+.1f%%" % v) if isinstance(v, (int, float)) else "扭亏/NA"
+
+
+def _render_pack_md(pack, texts):
+    p = pack
+    L = ["# 判定素材包 · %s(%s) · %s" % (p["name"], p["code"], p["asof"]), ""]
+    q = p.get("quote") or {}
+    m = p.get("price") or {}
+    g = p.get("market_gate") or {}
+    L += ["> 现价 %s · 总市值 %s亿 · PE(动) %s · 距一年高点 %.0f%% · 3年低点 %.2f倍 · 年内 %+.1f%% · 大盘β %s(%s)"
+          % (q.get("price") or "—", q.get("mcap_yi") or "—", q.get("pe") or "—",
+             ((m.get("drawdown") or 0) * 100 if m.get("drawdown") is not None else None) or 0,
+             m.get("realized_3y") or 0, m.get("ytd_pct") or 0,
+             g.get("verdict", "—"), g.get("method", "")), ""]
+
+    L += ["## 一、三线单季序列(近4季, F10自算)", ""]
+    qt = p.get("quarterly_table") or []
+    rows = []
+    for t in qt:
+        sy = t["single_yi"]
+        qq = t["qoq"]
+        rows.append([t["label"],
+                     "%s/%s/%s" % tuple(("%.1f" % v) if v is not None else "—" for v in sy),
+                     "%s/%s/%s" % tuple(_fmt_yoy(v).replace("%", "") for v in (p["qs"]["rev_yoy"].get(t["label"]), p["qs"]["parent_yoy"].get(t["label"]), p["qs"]["deduct_yoy"].get(t["label"]))),
+                     "%s/%s/%s" % tuple(("%+.0f" % v) if v is not None else "—" for v in qq)])
+    L += _tbl(["季", "单季亿(营/归/扣)", "同比%", "环比%"], rows) + [""]
+    ana = p.get("analysis")
+    if ana:
+        L += ["- 过线: %s(%d/3) · 最长连续 %d 季 · 形态 %s · 加速 %s" % (
+            "/".join(ana["pass_lines"]["labels"]) or "无", ana["pass_lines"]["count"],
+            ana["streak_max"], ana["resonance"], ana["rev_accel"]),
+              "- 降档: %s · 扣非背离: %s" % (ana["downshift"], ana["divergence"]["flag"]), ""]
+    sp = p.get("stage_pre")
+    if sp:
+        L += ["**阶段预判(纯算法, 供参考)**: %s —— %s" % (sp[0], sp[1]), ""]
+    fc = p.get("forecast")
+    if fc:
+        L += ["**业绩预告**: %s" % json.dumps(fc, ensure_ascii=False)[:200], ""]
+
+    qual = p.get("quality") or {}
+    if qual:
+        L += ["## 二、质地", ""]
+        ml = qual.get("ml_trend") or []
+        if ml:
+            L += ["- 毛利率(累计): " + " → ".join("%s %.1f%%" % (l, v) for l, v in ml[-6:])]
+        lt = qual.get("latest") or {}
+        L += ["- ROE %s · ROIC %s · 负债率 %s · 净现比 %s%%" % (
+            lt.get("roe"), lt.get("roic"), lt.get("debt"), lt.get("ncf_np")), ""]
+
+    bal = p.get("balance_leads") or []
+    if bal:
+        L += ["## 三、资产负债表先行信号(亿, 早期→近)", ""]
+        keys = ["合同负债", "存货", "应收账款", "货币资金", "有息负债", "商誉"]
+        rows = [[b["label"]] + [b.get(k) for k in keys] for b in reversed(bal)]
+        L += _tbl(["期"] + keys, rows) + [""]
+
+    hold = p.get("holders") or {}
+    d = hold.get("top10_diff")
+    if d:
+        L += ["## 四、股东筹码", "",
+              "- 十大流通股东(%s → %s): 新进 %s | 退出 %s" % (d["period"][0], d["period"][1],
+                  "、".join(d["new"]) or "无", "、".join(d["exit"]) or "无")]
+        if d["change"]:
+            L += ["- 变动≥15%: " + "; ".join(d["change"])]
+    hw = hold.get("holders_wan") or []
+    if hw:
+        L += ["- 股东户数(万户, 新→旧): " + " → ".join("%.2f" % v for _, v in hw if v), ""]
+
+    comp = p.get("composition") or {}
+    if comp.get("rows"):
+        L += ["## 五、主营构成(最近厚报告期 vs 上年同期)", ""]
+        rows = [[c["period"][:4] + ("中报" if c["period"][5:7] == "06" else "年报"), c["dim"], (c["item"] or "")[:22],
+                 c["rev_yi"], (("%.1f%%" % c["share_pct"]) if c["share_pct"] is not None else "—"),
+                 (("%.1f%%" % c["gm_pct"]) if isinstance(c["gm_pct"], (int, float)) else "—")]
+                for c in comp["rows"] if c["dim"] in ("按业务", "按地区")]
+        L += _tbl(["期", "维度", "构成", "收入亿", "占比", "毛利率"], rows[:24]) + [""]
+    for rd, rv in (comp.get("jyps") or [])[:1]:
+        if rv:
+            L += ["## 六、经营评述(%s, API)" % rd, "", rv[:2600], ""]
+    cons = p.get("consensus") or {}
+    if cons.get("reports_12m"):
+        L += ["## 六B、券商一致预期(近12月研报)", "",
+              "- 研报 %s 篇 / 覆盖机构 %s 家 / 最近 %s" % (cons.get("reports_12m"), cons.get("orgs"), cons.get("latest_date")),
+              "- 评级分布: %s" % (json.dumps(cons.get("ratings") or {}, ensure_ascii=False)),
+              "- 盈利预测(EPS): %s" % (cons.get("eps_forecasts") or "无数据"), ""]
+
+    if texts:
+        L += ["## 七、报告章节原文(两厚两薄, 判定素材)", ""]
+        for t in texts:
+            L += ["### %s(%s)%s" % (t["cn"], t["label"], " 厚" if t["thick"] else " 薄"), ""]
+            for k, v in t["chapters"].items():
+                if v and v != "(未定位)":
+                    vv = v[:3000] if k != "管理层讨论" else v[:6000]
+                    L += ["**[%s]**" % k, "", vv, ""]
+    if p.get("degraded"):
+        L += ["## 降级项", ""] + ["- `%s` %s" % (f, w) for f, w in p["degraded"]] + [""]
+
+    L += ["## 八、判定任务(填 verdict.json)", "",
+          "读上方素材 + jingshui(核心因子7条/5不买) + can-slim(七要素) + lynch(六分类)标准, 写同目录 verdict.json:",
+          "```json",
+          json.dumps({
+              "code": p["code"], "name": p["name"],
+              "is_tenbagger_candidate": True, "confidence": "高/中/低",
+              "stage": "主升期/强势待确认/回调击球区/深调考验区/退潮/利润未兑现/预告爆发",
+              "stage_reason": "≤60字, 需引用素材中的证据",
+              "jingshui_core7": [{"no": 1, "item": "营收利润增速≥40%", "verdict": "✓/✗/部分", "evidence": "≤40字"}],
+              "jingshui_5no": [{"no": 1, "item": "亏损公司?", "verdict": "✗/✓", "evidence": ""}],
+              "canslim": {"C": "✓/✗/部分:证据", "A": "", "N": "", "S": "", "L": "", "I": "", "M": ""},
+              "lynch_class": "快速增长/稳定增长/缓慢增长/周期/困境反转/隐蔽资产",
+              "lynch_reason": "≤40字",
+              "tps_qualitative": {"F1行业空间": "≤60字", "F5催化": "", "F6生意模式": ""},
+              "risks": ["≤3条, 每条注明看什么指标跟踪"],
+              "watch_next": ["≤3个可跟踪变量"],
+              "conclusion": "过/不过/部分通过(差哪几条)"
+          }, ensure_ascii=False, indent=1), "```", ""]
+    return "\n".join(L)
+
+
+# ============ ⑦ verdict 校验 + 报告组装 ============
+
+STAGES = ("主升期", "强势待确认", "回调击球区", "深调考验区", "退潮", "利润未兑现", "预告爆发")
+CONF = ("高", "中", "低")
+CORE7 = ["营收利润增速≥40%", "新产品/新服务/新市场量价齐升", "管理层对产业趋势强烈认同",
+         "当下时代核心产业趋势中的超级α", "逻辑无法证伪、越推演越明朗", "符合机构选股偏好",
+         "政策大力扶持的第一核心行业"]
+NO5 = ["亏损公司?", "主营增速<40%?", "未创一年新高?", "无新产品/新市场?", "无强供求矛盾?"]
+CS_KEYS = ("C", "A", "N", "S", "L", "I", "M")
+LYNCH = ("快速增长", "稳定增长", "缓慢增长", "周期", "困境反转", "隐蔽资产")
+
+
+def load_verdict(path):
+    """读 verdict.json -> (verdict, 校验错误列表)。缺字段给出确定性占位, 不阻塞组装。"""
+    errs = []
+    try:
+        v = json.load(open(path, encoding="utf-8"))
+    except Exception as e:
+        return None, ["verdict.json 解析失败: %s" % e]
+    if v.get("stage") not in STAGES:
+        errs.append("stage 非法或缺: %r" % v.get("stage"))
+        v["stage"] = "强势待确认"
+    if v.get("confidence") not in CONF:
+        v.setdefault("confidence", "低")
+    v.setdefault("is_tenbagger_candidate", False)
+    c7 = v.get("jingshui_core7")
+    if not isinstance(c7, list) or len(c7) != 7:
+        errs.append("jingshui_core7 应为7条(现%d条) —— 已按缺省补齐" % (len(c7) if isinstance(c7, list) else 0))
+        v["jingshui_core7"] = [{"no": i + 1, "item": it, "verdict": "部分", "evidence": "未判定"}
+                               for i, it in enumerate(CORE7)]
+    n5 = v.get("jingshui_5no")
+    if not isinstance(n5, list) or len(n5) != 5:
+        v["jingshui_5no"] = [{"no": i + 1, "item": it, "verdict": "未判定", "evidence": ""}
+                             for i, it in enumerate(NO5)]
+        errs.append("jingshui_5no 应为5条 —— 已按缺省补齐")
+    cs = v.get("canslim") or {}
+    v["canslim"] = {k: cs.get(k) or "未判定" for k in CS_KEYS}
+    if v.get("lynch_class") not in LYNCH:
+        v["lynch_class"] = v.get("lynch_class") or "未判定"
+        errs.append("lynch_class 非法 —— 标记未判定")
+    for k in ("stage_reason", "lynch_reason", "conclusion"):
+        v.setdefault(k, "")
+    v.setdefault("tps_qualitative", {})
+    v.setdefault("risks", [])
+    v.setdefault("watch_next", [])
+    return v, errs
+
+
+def render_report(pack, verdict, errs):
+    p = pack
+    L = ["# %s(%s) 十倍股判定报告" % (p.get("name"), p.get("code")), "",
+         "> 判定日 %s · 素材: F10八季三线/资产负债表/股东/主营构成/两厚两薄报告章节/价格与大盘β" % p.get("asof"),
+         "> 方法论: 静水核心因子+5不买(主判) · CAN SLIM 七要素 · 林奇六分类 · 判定引擎 tenscreener judge",
+         "> 声明: 非投资建议, 仅供参考学习。", ""]
+    cand = "是" if verdict.get("is_tenbagger_candidate") else "否"
+    L += ["## 结论",
+          "",
+          "- **是否十倍股候选: %s**(置信 %s)" % (cand, verdict.get("confidence")),
+          "- **所处阶段: %s** —— %s" % (verdict.get("stage"), verdict.get("stage_reason")),
+          "- **阶段预判(纯算法对照)**: %s" % (pack.get("stage_pre") or ("—",))[0],
+          "- **清单结论: %s**" % verdict.get("conclusion", "—"),
+          "- **林奇分类: %s** —— %s" % (verdict.get("lynch_class"), verdict.get("lynch_reason")), ""]
+    L += ["## 静水核心因子 7 条", "", "| # | 因子 | 判定 | 依据 |", "|---|---|---|---|"]
+    for it in verdict.get("jingshui_core7", []):
+        L.append("| %s | %s | %s | %s |" % (it.get("no"), it.get("item"), it.get("verdict"), it.get("evidence", "")))
+    L += ["", "## 静水 5 不买(一票否决)", "", "| # | 项 | 判定 |", "|---|---|---|"]
+    for it in verdict.get("jingshui_5no", []):
+        L.append("| %s | %s | %s |" % (it.get("no"), it.get("item"), it.get("verdict")))
+    L += ["", "## CAN SLIM 七要素", ""]
+    for k in CS_KEYS:
+        L.append("- **%s** %s" % (k, verdict["canslim"].get(k)))
+    tq = verdict.get("tps_qualitative") or {}
+    if tq:
+        L += ["", "## TPS 定性因子(Claude 判)", ""]
+        for k, vv in tq.items():
+            if vv:
+                L.append("- **%s**: %s" % (k, vv))
+    if verdict.get("risks"):
+        L += ["", "## 风险与跟踪"] + ["- %s" % r for r in verdict["risks"]]
+    if verdict.get("watch_next"):
+        L += ["", "## 下一步盯什么"] + ["- %s" % w for w in verdict["watch_next"]]
+    if errs:
+        L += ["", "> ⚠ verdict 校验: " + "; ".join(errs)]
+    L += ["", "---", "*非投资建议 · tenscreener judge · %s*" % p.get("asof")]
+    return "\n".join(L)
+
+
+def finalize(code):
+    """读 pack.json + verdict.json → report.md。-> (ok, path|None)"""
+    code6 = str(code).split(".")[0]
+    base = None
+    for d in sorted(os.listdir(OUTROOT), reverse=True):
+        if d.startswith(code6):
+            base = os.path.join(OUTROOT, d)
+            break
+    if not base:
+        print("未找到 %s 的素材包, 先跑 judge --code" % code6)
+        return False, None
+    pack = json.load(open(os.path.join(base, "pack.json"), encoding="utf-8"))
+    v, errs = load_verdict(os.path.join(base, "verdict.json"))
+    if v is None:
+        return False, None
+    md = render_report(pack, v, errs)
+    path = os.path.join(base, "report.md")
+    open(path, "w", encoding="utf-8").write(md)
+    return True, path

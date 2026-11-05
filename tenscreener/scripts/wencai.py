@@ -19,10 +19,20 @@ import subprocess
 import sys
 from datetime import date
 
-DEFAULT_FINANCE_CLI = os.path.expanduser(
-    "~/.claude/skills/hithink-finance-query/scripts/cli.py")
-DEFAULT_ZHISHU_CLI = os.path.expanduser(
-    "~/.claude/skills/hithink-zhishu-query/scripts/cli.py")
+def _probe_cli(skill):
+    """问财 CLI 多位置探测(2026-11-05: ~/.claude/skills 已废弃, 官方技能装在
+    work/.claude/skills; 不修则 L1/runner/watch 全部静默降级 —— flow.py 同款雷)。"""
+    cands = [os.path.expanduser(p) for p in (
+        "~/Documents/work/.claude/skills/%s/scripts/cli.py" % skill,
+        "~/.claude/skills/%s/scripts/cli.py" % skill)]
+    for p in cands:
+        if os.path.exists(p):
+            return p
+    return cands[0]
+
+
+DEFAULT_FINANCE_CLI = _probe_cli("hithink-finance-query")
+DEFAULT_ZHISHU_CLI = _probe_cli("hithink-zhishu-query")
 
 SKILL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE_ROOT = os.path.join(SKILL_ROOT, "outputs", "cache")

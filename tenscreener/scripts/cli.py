@@ -75,6 +75,25 @@ def _write_archive(parts, report_md=None):
     print(f"[归档] {d} (api={c['api']} cache={c['cache_hit']})", file=sys.stderr)
 
 
+# ─── judge: 单标的十倍股完整判定(v3 判断权威, 2026-11-05) ──
+
+def cmd_judge(args):
+    """judge 三段式入口: 默认取数产素材包; --finalize 校验 verdict.json 并组装报告。
+    取数全免费源(东财F10/资产负债表/股东/主营构成/emweb + 腾讯K线 + 巨潮PDF), 零问财额度。"""
+    import judge as _j
+    code6 = str(args.code).split(".")[0]
+    outdir = os.path.join(OUT_ROOT, "judge", "%s_%s" % (code6, date.today().strftime("%Y%m%d")))
+    if args.finalize:
+        ok, path = _j.finalize(code6)
+        if ok:
+            print("报告已组装: %s" % path)
+        return
+    pack, d = _j.build_pack(args.code, outdir)
+    print("素材包完成: %s/pack.md | 报告%d份 | 降级%d项"
+          % (d, len(pack.get("report_texts_meta") or []), len(_j.DEGRADED)), file=sys.stderr)
+    print("下一步: Claude 读 pack.md(结合 jingshui/can-slim/lynch 标准) → 写 %s/verdict.json → 再跑 --finalize" % d)
+
+
 # ─── L1/L2/L3 ───────────────────────────────────────────────
 
 def cmd_screen(args):
@@ -562,6 +581,13 @@ def build_parser():
     tp.add_argument("--downshift-pp", type=float, default=30.0, help="E1 增速降档阈值pp(默认 30)")
     tp.add_argument("--include-confirmed", action="store_true", help="连带检查 confirmed(预演)")
     tp.set_defaults(func=cmd_track)
+
+    # ── judge: 单标的十倍股完整判定(v3 判断权威, 2026-11-05) ──
+    jp = sub.add_parser("judge", parents=[common], help="单标的十倍股判定(取数→素材包→三方法论判定→报告)")
+    jp.add_argument("--code", "-c", required=True, help="股票代码(6位, 可带后缀)")
+    jp.add_argument("--finalize", action="store_true",
+                    help="校验 verdict.json 并组装 report.md(默认=取数产素材包)")
+    jp.set_defaults(func=cmd_judge)
 
     return p
 
