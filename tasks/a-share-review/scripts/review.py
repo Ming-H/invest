@@ -78,7 +78,7 @@ def announcement_radar(stocks, outdir, days=2):
             seen = json.load(open(seen_fp, encoding="utf-8"))
         except Exception:
             seen = {}
-    L = ["## 四B、公告雷达（重点标的 %d 只）" % len(stocks),
+    L = ["## 三、公告解读（关注标的 %d 只 · 巨潮）" % len(stocks),
          "> 窗口: 近%d日新公告 | 关键公告带解读, 程序性只列 | 同一公告跨日只解读一次" % days, ""]
     texts, n_new, n_pdf = [], 0, 0
     for s in stocks:
@@ -253,6 +253,7 @@ def build(args):
     for _old in _glob.glob(os.path.join(outdir, "chart*.png")):
         os.remove(_old)
     lines, imgs = [], []
+    fig_no = 0          # v3: 全局自增图号(图缺失跳号, 防锚点碰撞)
 
     # ===== 模块一 市场总览 =====
     try:
@@ -285,8 +286,7 @@ def build(args):
     if amt_series:
         amt_series[-1]["amount_state"] = amt_state
 
-    lines += ["# %s A股复盘" % cn_date(trade_date), ""]
-    lines += ["## 一、市场总览", "",
+    lines += ["## 一、大盘", "", "### 1.1 指数与量能", "",
               "| 指数 | 收盘 | 涨跌幅 |",
               "|---|---:|---:|"]
     for x in ov:
@@ -308,7 +308,6 @@ def build(args):
     if amt5:
         amt_txt += "，%s(5日均量{:,.0f}亿)".format(round(amt5)) % amt_state
     lines += ["", amt_txt + " | " + br_txt + " | " + m_txt, ""]
-    lines += ["〖图1〗近10日两市成交额(沪+深综)与上证走势", ""]
     if len(amt_series) >= 5 and sh_rows:
         n = min(len(amt_series), 10)
         dates = [x["date"][5:] for x in amt_series[-n:]]
@@ -317,16 +316,39 @@ def build(args):
         try:
             p = charts.chart_volume(dates, [x["amount_yi"] for x in amt_series[-n:]], closes,
                                     os.path.join(outdir, "chart1_volume.png"))
-            imgs.append((p, "〖图1〗"))
+            fig_no += 1
+            imgs.append((p, "〖图%d〗" % fig_no))
+            lines += ["〖图%d〗近10日两市成交额(沪+深综)与上证走势" % fig_no, ""]
         except Exception:
-            lines.append("(图1生成失败)")
             degraded.append("图1")
     else:
-        lines.append("(图1数据不足)")
         degraded.append("图1数据")
 
-    # ===== 模块二 大涨标的 =====
-    lines += ["## 二、大涨标的雷达（近20日）", ""]
+    # ===== 1.2 资金主线(原模块三, v3 并入大盘) =====
+    fl = data.sector_flows(8, 6)
+    if not fl["inflow"] and not fl["outflow"]:
+        degraded.append("板块资金流")
+    def flow_txt(rows, sign):
+        out = []
+        for r in rows[:5]:
+            streak = flow_streak(hist + [{"flows": fl}], r["name"], sign) if hist else 1
+            tag = "·连续%d日" % streak if streak >= 2 else ""
+            out.append("%s(%+.1f亿, %+.1f%%%s)" % (r["name"], r["amount"], r.get("pct") or 0, tag))
+        return "、".join(out)
+    lines += ["### 1.2 资金主线", "",
+              "**主力净流入**：" + (flow_txt(fl["inflow"], 1) or "未获取"), "",
+              "**主力净流出**：" + (flow_txt(fl["outflow"], -1) or "未获取"), ""]
+    try:
+        p = charts.chart_flow(fl["inflow"], fl["outflow"], os.path.join(outdir, "chart2_flow.png"))
+        if p:
+            fig_no += 1
+            imgs.append((p, "〖图%d〗" % fig_no))
+            lines += ["〖图%d〗行业主力资金净额（红入绿出）" % fig_no, ""]
+    except Exception:
+        degraded.append("图2")
+
+    # ===== 1.3 情绪梯队(原模块二, v3 并入大盘) =====
+    lines += ["### 1.3 情绪梯队", ""]
     gainers = data.top_gainers_20d(15)
     if not gainers:
         degraded.append("涨幅榜")
@@ -350,41 +372,21 @@ def build(args):
         lines.append("(近20日涨幅榜未获取)")
     lb = data.lianban_ladder()
     if lb:
-        lines += ["", "**连板梯队**（≥2连板 %d 只）：" % len(lb)]
-        lines.append("、".join("%s(%d板)" % (x["name"], x["days"]) for x in lb[:14]))
-    lines += ["", "〖图2〗近20日涨幅榜 Top15（★=L2精选表 ◎=十倍股终选池）", ""]
+        hi_lb = [x for x in lb if x["days"] >= 4]      # 一行化: 只点名≥4板
+        tail = "、".join("%s(%d板)" % (x["name"], x["days"]) for x in hi_lb) if hi_lb else "无"
+        lines += ["", "**连板梯队**（≥2连板 %d 只｜≥4板：%s）" % (len(lb), tail)]
     try:
-        p = charts.chart_gainers(gainers, os.path.join(outdir, "chart2_gainers.png"))
-        imgs.append((p, "〖图2〗"))
+        p = charts.chart_gainers(gainers, os.path.join(outdir, "chart3_gainers.png"))
+        fig_no += 1
+        imgs.append((p, "〖图%d〗" % fig_no))
+        lines += ["", "〖图%d〗近20日涨幅榜 Top15（★=L2精选表 ◎=十倍股终选池）" % fig_no, ""]
     except Exception:
-        lines.append("(图2生成失败)")
-
-    # ===== 模块三 当前热点(带连续性) =====
-    fl = data.sector_flows(8, 6)
-    if not fl["inflow"] and not fl["outflow"]:
-        degraded.append("板块资金流")
-    def flow_txt(rows, sign):
-        out = []
-        for r in rows[:8]:
-            streak = flow_streak(hist + [{"flows": fl}], r["name"], sign) if hist else 1
-            tag = "·连续%d日" % streak if streak >= 2 else ""
-            out.append("%s(%+.1f亿, %+.1f%%%s)" % (r["name"], r["amount"], r.get("pct") or 0, tag))
-        return "、".join(out)
-    lines += ["## 三、当前热点", "",
-              "**主力净流入**：" + (flow_txt(fl["inflow"], 1) or "未获取"), "",
-              "**主力净流出**：" + (flow_txt(fl["outflow"], -1) or "未获取"), ""]
-    lines += ["〖图3〗行业主力资金净额（红入绿出）", ""]
-    try:
-        p = charts.chart_flow(fl["inflow"], fl["outflow"], os.path.join(outdir, "chart3_flow.png"))
-        if p:
-            imgs.append((p, "〖图3〗"))
-    except Exception:
-        lines.append("(图3生成失败)")
+        degraded.append("图3")
     lines += ["⟦CLAUDE: 今日主线一句话——先读同目录 notes_for_claude.md 素材包(昨日vs今日资金/连板/量能对比), 再结合上方数据写1-2句：主线是延续/切换/新起⟧", ""]
 
-    # ===== 模块四 关注标的(分组双卡) =====
+    # ===== 二、关注标的(全息卡; v3: 公告归板块三, 此处不再列) =====
     wl = load_watchlist()
-    lines += ["## 四、关注标的全息卡", ""]
+    lines += ["## 二、关注标的（全息卡）", ""]
     if not wl:
         lines += ["（未设定关注列表。`--set 代码:成本` 为持仓组, `--add 代码` 为观察组。）", ""]
     batch = data.stock_quotes_batch([s["code"] for s in wl]) if wl else {}
@@ -458,9 +460,6 @@ def build(args):
         if code in jx:
             j = jx[code]
             lines.append("精选表: %s分 · %s · %s" % (j.get("score"), j.get("stage"), j.get("action")))
-        anns = data.announcements_recent(code, days=7, limit=5)
-        if anns:
-            lines += ["近7日公告：" + "；".join("%s(%s)" % (a["title"][:28], a["date"]) for a in anns)]
         news = data.stock_news(q.get("name") or "", 3)
         if news:
             lines += ["相关新闻：" + "；".join("%s" % n["title"][:30] for n in news[:3])]
@@ -473,7 +472,6 @@ def build(args):
                 mf = data.stock_moneyflow_daily(code, 10)
                 if len(mf) >= 3:
                     close_by_date = {r0["date"]: r0["close"] for r0 in k}
-                    rows_txt = []
                     absorb = panic = 0   # 吸筹=跌日主力买; 出逃=涨日主力卖
                     streak = 0
                     for i, m in enumerate(mf):
@@ -488,7 +486,6 @@ def build(args):
                                 absorb += 1
                             elif chg > 0 and m["main_yi"] < 0:
                                 panic += 1
-                        rows_txt.append("%s %+0.2f亿" % (m["date"][5:], m["main_yi"]))
                     for m in reversed(mf):
                         if m["main_yi"] > 0:
                             streak += 1
@@ -511,41 +508,43 @@ def build(args):
                         pattern.append("跌日吸筹×%d(主力接散户筹码)" % absorb)
                     if panic >= 3:
                         pattern.append("涨日出逃×%d⚠" % panic)
-                    lines.append("主力资金(近%d日): %s%s%s" % (
-                        len(mf), " → ".join(rows_txt[-6:]),
-                        ("｜" + verdict) if verdict else "",
+                    # v3: 逐日序列留图内(60日全息图), 正文一行摘要
+                    net5 = round(sum(m["main_yi"] for m in mf[-5:]), 2)
+                    lines.append("主力资金: 近5日净额 **%+.2f亿**%s%s" % (
+                        net5, ("｜" + verdict) if verdict else "",
                         ("｜" + "，".join(pattern)) if pattern else ""))
                     mf60 = data.stock_moneyflow_daily(code, 60)
             except Exception:
                 mf60 = []
                 pass
-        anchor = "〖图%d〗%s 近60日量价+主力资金" % (len(imgs) + 1, q.get("name") or code)
-        lines += [anchor, ""]
         try:
             n60 = min(60, len(k))
+            fig_no += 1
+            anchor = "〖图%d〗%s 近60日量价+主力资金" % (fig_no, q.get("name") or code)
             p = charts.chart_stock(q.get("name") or code,
                                    [r["date"] for r in k[-n60:]], closes[-n60:], vols[-n60:],
                                    cost=cost, high52=hi52, trigger=trig,
-                                   out=os.path.join(outdir, "chart%d_%s.png" % (len(imgs) + 1, code)),
+                                   out=os.path.join(outdir, "chart%d_%s.png" % (fig_no, code)),
                                    main_flows=mf60)
             if p:
                 imgs.append((p, anchor[:4]))
+                lines += [anchor, ""]
         except Exception:
             pass
 
-    # ===== 模块四B 公告雷达(重点标的, 2026-11-05; 异常不阻塞复盘) =====
+    # ===== 三、公告解读(原四B雷达, v3 升级独立板块; 异常不阻塞复盘) =====
     try:
         radar_lines, ann_new, ann_pdf = announcement_radar(wl, outdir)
         lines += radar_lines
         print("[radar] 新公告%d条, 带PDF解读%d条" % (ann_new, ann_pdf), flush=True)
     except Exception as ex:
-        lines += ["## 四B、公告雷达", "> ⚠ 雷达异常(不影响其余模块): %s" % str(ex)[:80], ""]
+        lines += ["## 三、公告解读", "> ⚠ 公告源异常(不影响其余模块): %s" % str(ex)[:80], ""]
 
-    # ===== 模块五 三行小结 + 昨日观察回检 =====
+    # ===== 四、三行小结 + 五、昨日观察回检 =====
     trend = (msh or {}).get("trend", "—")
     top_in = fl["inflow"][0]["name"] if fl["inflow"] else "—"
     top_out = fl["outflow"][0]["name"] if fl["outflow"] else "—"
-    lines += ["## 五、三行小结", "",
+    lines += ["## 四、三行小结", "",
               "- 定性：⟦CLAUDE: 依据指数分化与涨跌家数(及素材包中昨日对比), 一句话定性今日市场⟧",
               "- 最重要信号：主力主攻 **%s**、出逃 **%s**；M短线=%s%s" % (
                   top_in, top_out, trend,
@@ -555,7 +554,7 @@ def build(args):
     # 昨日观察回检(机检部分)
     checks = _recheck_yesterday(prev, batch, sh_rows, msh)
     if prev or checks:
-        lines += ["## 六、昨日观察回检", ""]
+        lines += ["## 五、昨日观察回检", ""]
         for c in checks:
             lines.append("- %s：**%s**（昨日说「%s」）" % (c["desc"], c["result"], c["quote"]))
         yw = None
