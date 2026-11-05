@@ -19,13 +19,15 @@ else
 fi
 
 # ② 平铺安装(rsync 增量; --delete 只清代码层过期文件, 排除项在目标侧受保护)
+#    v4 仓库嵌套(tasks/stack), 目标按 basename 平铺(Claude Code 只认 skills/<名>/SKILL.md)
 mkdir -p "$DEST"
 for s in $SKILLS; do
+  name="$(basename "$s")"
   rsync -a --delete \
     --exclude '.git' --exclude 'outputs' --exclude 'cache' \
     --exclude 'watchlist.json' --exclude '__pycache__' --exclude '.DS_Store' \
-    "$STAGE/$s/" "$DEST/$s/"
-  [ -f "$DEST/$s/SKILL.md" ] && echo "✓ $s" || echo "⚠ $s 缺 SKILL.md"
+    "$STAGE/$s/" "$DEST/$name/"
+  [ -f "$DEST/$name/SKILL.md" ] && echo "✓ $name" || echo "⚠ $name 缺 SKILL.md"
 done
 
 echo "完成: $(echo $SKILLS | wc -w | tr -d ' ') 个技能 -> $DEST"
