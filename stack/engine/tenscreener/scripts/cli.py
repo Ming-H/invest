@@ -78,8 +78,8 @@ def _write_archive(parts, report_md=None):
 # ─── judge: 单标的十倍股完整判定(v3 判断权威, 2026-11-05) ──
 
 def cmd_judge(args):
-    """judge 三段式入口: 默认取数产素材包; --finalize 校验 verdict.json 并组装报告。
-    取数全免费源(东财F10/资产负债表/股东/主营构成/emweb + 腾讯K线 + 巨潮PDF), 零问财额度。"""
+    """judge v4.1 分级入口: Stage1 三线40%硬闸(秒级, 不过则快速否决终止)
+    → 过闸才深读取数产素材包; --publish 仅十倍股候选发布飞书。"""
     import judge as _j
     code6 = str(args.code).split(".")[0]
     outdir = os.path.join(OUT_ROOT, "judge", "%s_%s" % (code6, date.today().strftime("%Y%m%d")))
@@ -91,11 +91,24 @@ def cmd_judge(args):
         if ok:
             print("报告已组装: %s" % path)
         return
+    # ── Stage1 三线40%硬闸(2026-11-05 用户定稿A案, 对齐 earnings-reader R1) ──
+    if getattr(args, "force_full", False):
+        print("[--force-full] 跳过 Stage1 硬闸, 直接深读", file=sys.stderr)
+    else:
+        passed, qs, singles, reason, latest, kind = _j.stage1_gate(code6)
+        if kind == "nodata":
+            print("Stage1 数据不可得, 不做否决(重试或检查网络): %s" % reason, file=sys.stderr)
+            return 1
+        if not passed:
+            q = _j.quote(code6) or {}
+            print(_j.quick_reject_md(q.get("name") or code6, code6, qs or {}, singles or {}, reason))
+            return
+        print("[Stage1 过闸] %s → 深读取数中..." % reason, file=sys.stderr)
     pack, d = _j.build_pack(args.code, outdir, with_pdf=not getattr(args, "no_pdf", False),
                             pdf_dir=getattr(args, "pdf_dir", None))
     print("素材包完成: %s/pack.md | 报告%d份 | 降级%d项"
           % (d, len(pack.get("report_texts_meta") or []), len(_j.DEGRADED)), file=sys.stderr)
-    print("下一步: Claude 读 pack.md(结合 jingshui/can-slim/lynch 标准) → 写 %s/verdict.json → 再跑 --finalize" % d)
+    print("下一步: Claude 读 pack.md(结合 jingshui/can-slim/lynch 标准) → 写 %s/verdict.json → 再跑 --publish" % d)
 
 
 # ─── L1/L2/L3 ───────────────────────────────────────────────
@@ -587,16 +600,20 @@ def build_parser():
     tp.set_defaults(func=cmd_track)
 
     # ── judge: 单标的十倍股完整判定(v3 判断权威, 2026-11-05) ──
-    jp = sub.add_parser("judge", parents=[common], help="单标的十倍股判定(取数→素材包→三方法论判定→报告)")
+    jp = sub.add_parser("judge", parents=[common],
+                        help="单标的十倍股分级判定(Stage1三线40%硬闸→深读→三典判定→条件发布)")
     jp.add_argument("--code", "-c", required=True, help="股票代码(6位, 可带后缀)")
+    jp.add_argument("--force-full", action="store_true",
+                    help="绕过 Stage1 硬闸直接深读(边缘案例人工指定)")
     jp.add_argument("--finalize", action="store_true",
-                    help="校验 verdict.json 并组装 report.md(默认=取数产素材包)")
+                    help="校验 verdict.json 并组装 report.md(默认=硬闸→取数产素材包)")
     jp.add_argument("--no-pdf", action="store_true",
                     help="快速模式: 跳过财报PDF下载与章节抽取, 纯API素材包(MD&A/募投/风险全文将缺席)")
     jp.add_argument("--pdf-dir", default=None,
                     help="PDF 归档目录(首次指定后持久为默认; 默认 outputs/pdf_library; 环境变量 TENSCREENER_PDF_DIR 亦可)")
     jp.add_argument("--publish", action="store_true",
-                    help="发布: finalize + 上传飞书文档 + 清理中间产物(本地只留 report.md; 需已写 verdict.json)")
+                    help="条件发布: 判定为十倍股候选→发飞书全量文档+清本地(仅留feishu_url.txt); "
+                         "判定为否→对话结论+清全部产物不发不落盘")
     jp.add_argument("--folder", default=None,
                     help="飞书目标文件夹 token(首次指定后持久为默认; 不指定用 config.judge_folder 或根目录)")
     jp.set_defaults(func=cmd_judge)

@@ -87,6 +87,64 @@ class TestQoqTable(unittest.TestCase):
         self.assertEqual(qt[0]["qoq"], (None, None, None))
 
 
+class TestStage1Gate(unittest.TestCase):
+    """v4.1 三线40%硬闸(2026-11-05 用户定稿A案, 对齐 earnings-reader R1)。"""
+
+    @staticmethod
+    def mk_qs(latest="2026Q3", rev=None, np_=None, ded=None):
+        return {"latest_period": latest,
+                "rev_yoy": {latest: rev}, "parent_yoy": {latest: np_}, "deduct_yoy": {latest: ded}}
+
+    def test_pass_all_lines_over_40(self):
+        qs = self.mk_qs(rev=55.0, np_=120.0, ded=98.0)
+        singles = {"2026Q3": (150e8, 25e8, 22e8)}
+        ok, reason, latest, kind = judge.gate_verdict(qs, singles)
+        self.assertTrue(ok); self.assertEqual(kind, "pass"); self.assertEqual(latest, "2026Q3")
+        self.assertIn("全>40%", reason)
+
+    def test_reject_line_under_40(self):
+        qs = self.mk_qs(rev=38.0, np_=136.7, ded=49.9)      # 药明26Q3型: 营收贴线
+        singles = {"2026Q3": (150e8, 25e8, 22e8)}
+        ok, reason, latest, kind = judge.gate_verdict(qs, singles)
+        self.assertFalse(ok); self.assertEqual(kind, "reject")
+        self.assertIn("未全过40%", reason)
+
+    def test_reject_current_quarter_loss(self):
+        qs = self.mk_qs(rev=55.0, np_=None, ded=None)
+        singles = {"2026Q3": (150e8, -3e8, None)}
+        ok, reason, latest, kind = judge.gate_verdict(qs, singles)
+        self.assertFalse(ok); self.assertEqual(kind, "reject")
+        self.assertIn("当季亏损", reason)
+
+    def test_turnaround_channel_needs_scale(self):
+        # 归母/扣非同比不可算(基数≤0) + 归母 0.3亿 < 0.5亿 → 否
+        qs = self.mk_qs(rev=55.0, np_=None, ded=None)
+        singles = {"2026Q3": (150e8, 3e7, None)}
+        ok, reason, latest, kind = judge.gate_verdict(qs, singles)
+        self.assertFalse(ok); self.assertEqual(kind, "reject"); self.assertIn("扭亏规模不足", reason)
+
+    def test_turnaround_channel_passes_with_scale(self):
+        qs = self.mk_qs(rev=55.0, np_=None, ded=None)
+        singles = {"2026Q3": (150e8, 6e7, None)}
+        ok, reason, latest, kind = judge.gate_verdict(qs, singles)
+        self.assertTrue(ok); self.assertEqual(kind, "pass"); self.assertIn("扭亏通道", reason)
+
+    def test_nodata_when_no_periods(self):
+        ok, reason, latest, kind = judge.gate_verdict({"latest_period": None}, {})
+        self.assertFalse(ok); self.assertEqual(kind, "nodata"); self.assertIsNone(latest)
+
+    def test_quick_reject_card(self):
+        """否决结论卡: 含4季表与依据, 供对话呈现(不落盘不发飞书)。"""
+        qs = {"latest_period": "2026Q3", "rev_yoy": {"2026Q3": 8.0},
+              "parent_yoy": {"2026Q3": 5.0}, "deduct_yoy": {"2026Q3": 3.0}}
+        singles = {"2026Q2": (100e8, 15e8, 14e8), "2026Q3": (108e8, 15.75e8, 14.42e8)}
+        md = judge.quick_reject_md("长江电力", "600900", qs, singles, "当季同比未全过40%线(...)")
+        self.assertIn("⛔ 快速否决 · 长江电力(600900)", md)
+        self.assertIn("| 2026Q3 | 108.0/15.8/14.4 | +8.0/+5.0/+3.0 |", md)
+        self.assertIn("--force-full", md)
+        self.assertIn("静水核心因子#1", md)
+
+
 class TestVerdict(unittest.TestCase):
     def _write(self, obj):
         f = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")

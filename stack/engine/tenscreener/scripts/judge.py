@@ -98,13 +98,69 @@ def resolve_folder(cli_val=None):
     return "", "我的空间根目录"
 
 
+def _run_dir(code6):
+    """该代码最新判定目录: 优先含 verdict.json 的最新目录(快速/完整模式并存时)。"""
+    dirs = sorted((d for d in os.listdir(OUTROOT) if d.startswith(code6 + "_")), reverse=True)
+    base = next((os.path.join(OUTROOT, d) for d in dirs
+                 if os.path.exists(os.path.join(OUTROOT, d, "verdict.json"))), None)
+    if base is None:
+        base = os.path.join(OUTROOT, dirs[0]) if dirs else None
+    return base
+
+
+def _cleanup(base, keep=()):
+    """清中间产物(素材包/判定/章节/PDF库副本); keep 之外的产物全清。"""
+    import shutil
+    for f in ("pack.md", "pack.json", "texts.json", "verdict.json", "report.md"):
+        if f in keep:
+            continue
+        try:
+            os.remove(os.path.join(base, f))
+        except Exception:
+            pass
+    if "pdf" not in keep:
+        shutil.rmtree(os.path.join(base, "pdf"), ignore_errors=True)
+
+
+def _reject_summary_md(pack, v, errs):
+    """判定为否的对话结论(不发飞书不落盘)。"""
+    name = pack.get("name") or ""
+    code = pack.get("code") or ""
+    L = ["## ✗ 判定为否 · %s(%s)" % (name, code), "",
+         "- **是否十倍股候选: 否**(置信 %s)" % v.get("confidence"),
+         "- **所处阶段: %s** —— %s" % (v.get("stage"), v.get("stage_reason") or ""),
+         "- **清单结论**: %s" % (v.get("conclusion") or "—"),
+         "- **林奇分类**: %s" % v.get("lynch_class")]
+    if v.get("risks"):
+        L.append("- **主要风险**: %s" % "; ".join(v["risks"][:3]))
+    if errs:
+        L.append("- ⚠ verdict 校验: %s" % "; ".join(errs))
+    L += ["", "(v4.1 发布策略: 判定为否不发飞书、不保留本地文件; 中间产物已清理)"]
+    return "\n".join(L)
+
+
 def publish(code, folder=None):
-    """finalize 后发布: report.md → 飞书文档; 成功后清理中间产物(本地只留最终 report.md)。"""
+    """v4.1 条件发布: 仅 is_tenbagger_candidate=true → 飞书文档(全量)且本地不留 report.md
+    (仅存 feishu_url.txt 指针); 判定为否 → 对话返回结论并清理全部产物, 不落盘不发文档。"""
+    code6 = str(code).split(".")[0]
+    base = _run_dir(code6)
+    if not base or not os.path.exists(os.path.join(base, "verdict.json")):
+        print("未找到 %s 的 verdict.json —— 先跑 judge --code 产素材包并完成三典判定" % code6)
+        return False, None
+    pack = {}
+    pj = os.path.join(base, "pack.json")
+    if os.path.exists(pj):
+        pack = json.load(open(pj, encoding="utf-8"))
+    v, errs = load_verdict(os.path.join(base, "verdict.json"))
+    if v is None:
+        return False, None
+    if not v.get("is_tenbagger_candidate"):
+        print(_reject_summary_md(pack, v, errs))
+        _cleanup(base)
+        return True, None
     ok, path = finalize(code)
     if not ok or not path:
         return False, None
-    code6 = str(code).split(".")[0]
-    pack = json.load(open(os.path.join(os.path.dirname(path), "pack.json"), encoding="utf-8"))
     name, asof = pack.get("name") or code6, pack.get("asof") or date.today().isoformat()
     folder_tok, src = resolve_folder(folder)
     exp = "/tmp/ts_judge_publish_%s.md" % code6
@@ -126,22 +182,12 @@ def publish(code, folder=None):
         if '"url"' in line:
             url = line.split('"url":')[1].strip().strip('",')
             break
-    base = os.path.dirname(path)
     if url:
-        # 只保留最终结果: 清中间产物(素材包/判定/章节/研报清单), 留 report.md 与飞书链接
-        for f in ("pack.md", "pack.json", "texts.json", "verdict.json"):
-            try:
-                os.remove(os.path.join(base, f))
-            except Exception:
-                pass
-        try:
-            import shutil
-            shutil.rmtree(os.path.join(base, "pdf"), ignore_errors=True)
-        except Exception:
-            pass
+        # v4.1: 本地只留 feishu_url.txt 指针(用户定稿: 不保留 report.md)
+        _cleanup(base, keep=("feishu_url.txt", ))
         open(os.path.join(base, "feishu_url.txt"), "w", encoding="utf-8").write(url)
         print("已发布(%s): %s" % (src, url))
-        print("本地仅保留 report.md + feishu_url.txt: %s" % base)
+        print("本地仅保留 feishu_url.txt: %s" % base)
     else:
         print("飞书发布失败: %s" % ((p.stderr or b"").decode("utf-8", "ignore")[:160] or out[:160]))
     return bool(url), url
@@ -244,6 +290,70 @@ def qoq_table(singles, n=4):
         out.append({"label": lbl, "single_yi": tuple(_yi(v) for v in singles.get(lbl, (None,) * 3)),
                     "qoq": qoq(lbl, i)})
     return out, labels
+
+
+# ============ ⓪ Stage1 三线40%硬闸(v4.1, 2026-11-05 用户定稿A案) ============
+# 对齐 earnings-reader R1 家族标准: 当季三线可算侧同比全>40% + 不亏损 + 扭亏通道(归母≥0.5亿)。
+# 不过 → 秒级否决(对话结论卡, 不下PDF不深读不落盘); 环比呈现不否决(静水字面为同比)。
+
+GATE_TH = 40.0       # 静水字面增速线(与族 PASS_LINE 一致)
+GATE_MIN_NP = 5e7    # 扭亏通道当季归母下限(0.5亿)
+
+
+def gate_verdict(qs, singles):
+    """纯函数闸门(可离线单测) -> (passed, reason, latest, kind)。
+    kind: pass / reject / nodata(数据源故障不否决)。"""
+    latest = (qs or {}).get("latest_period")
+    if not latest:
+        return False, "F10 三线数据不可得", None, "nodata"
+    rev, np_, ded = (singles or {}).get(latest) or (None, None, None)
+    lbl = {"rev": "营收", "np": "归母", "ded": "扣非"}
+    if (np_ is not None and np_ <= 0) or (ded is not None and ded <= 0):
+        return False, ("当季亏损出局(归母%s/扣非%s)"
+                       % tuple(("%.1f亿" % (v / 1e8)) if v is not None else "—" for v in (np_, ded))), latest, "reject"
+    yys = {"rev": (qs.get("rev_yoy") or {}).get(latest),
+           "np": (qs.get("parent_yoy") or {}).get(latest),
+           "ded": (qs.get("deduct_yoy") or {}).get(latest)}
+    comp = {k: v for k, v in yys.items() if v is not None}
+    seg_all = " ".join("%s%s" % (lbl[k], ("%+.1f%%" % yys[k]) if yys[k] is not None else "同比不可算")
+                       for k in ("rev", "np", "ded"))
+    if any(v <= GATE_TH for v in comp.values()):
+        return False, "当季同比未全过40%%线(%s; 可算侧须全>40%%)" % seg_all, latest, "reject"
+    if not any(k in ("np", "ded") for k in comp):        # 归母+扣非同比全不可算=扭亏类
+        if np_ is None or np_ < GATE_MIN_NP:
+            return False, ("扭亏规模不足(归母/扣非同比全不可算, 当季归母%s < 0.5亿)"
+                           % (("%.1f亿" % (np_ / 1e8)) if np_ is not None else "缺值")), latest, "reject"
+        return True, "扭亏通道过闸(当季归母%.1f亿≥0.5亿, %s)" % (np_ / 1e8, seg_all), latest, "pass"
+    return True, "当季三线同比全>40%%(%s)" % seg_all, latest, "pass"
+
+
+def stage1_gate(code):
+    """Stage1 取数+闸门(F10免费源, 秒级)。-> (passed, qs, singles, reason, latest, kind)"""
+    try:
+        qs, singles, periods = three_line_qs(str(code).split(".")[0])
+    except Exception as e:
+        return False, None, None, "三线取数失败: %s" % str(e)[:80], None, "nodata"
+    passed, reason, latest, kind = gate_verdict(qs, singles)
+    return passed, qs, singles, reason, latest, kind
+
+
+def quick_reject_md(name, code, qs, singles, reason):
+    """Stage1 否决结论卡: 仅对话呈现 —— 不落盘、不发飞书、不做深读。"""
+    qt, _ = qoq_table(singles or {}, 4)
+    L = ["## ⛔ 快速否决 · %s(%s) 非十倍股候选" % (name or code, code), "",
+         "> Stage1 三线40%硬闸未过(秒级判定, 未做报告深读) · 非投资建议", "",
+         "**否决原因**: %s" % reason, "", "近4季三线(F10自算, 单季):", ""]
+    rows = []
+    for t in qt:
+        yy = [(qs.get(k) or {}).get(t["label"]) for k in ("rev_yoy", "parent_yoy", "deduct_yoy")]
+        rows.append([t["label"],
+                     "%s/%s/%s" % tuple(("%.1f" % v) if v is not None else "—" for v in t["single_yi"]),
+                     "/".join(("%+.1f" % v) if v is not None else "—" for v in yy),
+                     "%s/%s/%s" % tuple(("%+.0f" % v) if v is not None else "—" for v in t["qoq"])])
+    L += _tbl(["季", "单季亿(营/归/扣)", "同比%", "环比%"], rows)
+    L += ["", "*依据: 静水核心因子#1「财报营收、利润增速≥40%」· 5不买#2「主营增速低于40%的不买」。*",
+          "*如需绕闸深读(边缘案例人工指定): `judge --code %s --force-full`*" % code]
+    return "\n".join(L)
 
 
 def quality_rows(code):
@@ -1018,14 +1128,9 @@ def render_report(pack, verdict, errs):
 
 
 def finalize(code):
-    """读 pack.json + verdict.json → report.md。-> (ok, path|None)
-    目录选择: 同代码多目录(如快速/完整模式并存)时, 优先取含 verdict.json 的最新目录。"""
+    """读 pack.json + verdict.json → report.md。-> (ok, path|None)"""
     code6 = str(code).split(".")[0]
-    dirs = sorted((d for d in os.listdir(OUTROOT) if d.startswith(code6 + "_")), reverse=True)
-    base = next((os.path.join(OUTROOT, d) for d in dirs
-                 if os.path.exists(os.path.join(OUTROOT, d, "verdict.json"))), None)
-    if base is None:
-        base = os.path.join(OUTROOT, dirs[0]) if dirs else None
+    base = _run_dir(code6)
     if not base or not os.path.exists(os.path.join(base, "pack.json")):
         print("未找到 %s 的素材包, 先跑 judge --code" % code6)
         return False, None

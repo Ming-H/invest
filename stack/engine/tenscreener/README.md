@@ -1,10 +1,11 @@
-# tenscreener · 十倍股筛选与生命周期监测
+# tenscreener · 十倍股单标的判定与生命周期监测
 
-> 一个 Claude Code Skill:融合 **CAN SLIM**(欧奈尔)与**静水超级成长股**体系,三级漏斗从全 A 股**收敛到 1-2 只最具 10 倍潜力**的股票,并用 **watch/track** 覆盖"错杀筛选 → 披露确认 → 持有退出"全周期。
+> 一个 Claude Code Skill:融合 **CAN SLIM**(欧奈尔)与**静水超级成长股**体系,**对给定单标的做分级判定**——Stage1 三线40%硬闸(秒级否决)→ Stage2 报告深读 → Stage3 静水/CAN SLIM/lynch 三典判定 → Stage4 条件发布(仅十倍股候选发飞书全量文档,否定不落盘)。另有 **watch/track** 覆盖"披露确认 → 持有退出"全周期。收敛到 1-2 只、买哪只,永远是投资人的决策,本工具不产出推荐名单。
 
 ## ✨ 特性
 
-- **双通道**:scout 三级漏斗(L1→L2→L3 TPS)找左侧错杀 + **runner 趋势中继在上涨期间识别十倍股**(五阶段:主升期/强势待确认/回调击球区/深调考验区/退潮;不恐高不设涨幅上限);已用若羽臣(+806%)与中际旭创(+1179%)真实回放验收
+- **分级判定(v4.1)**:`judge --code` 三线40%硬闸秒级否决(当季营收/归母/扣非可算侧同比全>40%才继续)→ 过闸才 PDF 深读+三典判定;仅判定为十倍股候选才发飞书,否定不落盘不发
+- **双通道(辅助发现)**:scout 三级漏斗(L1→L2→L3 TPS)找左侧错杀 + **runner 趋势中继在上涨期间识别十倍股**(五阶段:主升期/强势待确认/回调击球区/深调考验区/退潮;不恐高不设涨幅上限);已用中际旭创(+1197%)与若羽臣(+806%)真实回放验收
 - **三线多季序列**:近四季单季 营收/归母/扣非 同比一次取回;过线条数/连续季数/共振形态(triple/profit_led/…)进排序权重,**单季掉线不剔除**(若羽臣 24Q4 教训)
 - **生命周期监测**:`watch`(财报披露后右侧确认:持续超预期+创一年新高+大盘β)、`track`(持有退出:增速降档/扣非背离/回撤裁定——回撤≥40% 触发的是"扛住 vs 基本面转折"裁定,不是卖出指令)
 - **TPS 七因子**:行业空间 + 终点对标 + 市值非线性衰减 + 成长性(含持续性/共振)+ 催化 + 模式 + 估值(PEG 接通)
@@ -27,7 +28,13 @@ ln -s /Users/z/Documents/work/my-projects/my-skills/tenscreener ~/.claude/skills
 ```bash
 cd ~/.claude/skills/tenscreener
 
-# ① 双通道:scout 左侧错杀 + runner 右侧趋势中继(上涨期间识别)
+# ⓪ 单标的分级判定(主路径): Stage1硬闸自动前置, 不过闸秒级否决
+python3 scripts/cli.py judge --code 603259          # 硬闸→过闸则深读产 pack.md
+#   → Claude 读 pack.md 写 verdict.json(三典判定) →
+python3 scripts/cli.py judge --code 603259 --publish # 候选才发飞书; 否定不落盘
+python3 scripts/cli.py judge --code 600900 --force-full  # 绕闸直读(边缘案例)
+
+# ① 双通道(辅助发现):scout 左侧错杀 + runner 右侧趋势中继(上涨期间识别)
 python3 scripts/cli.py screen --report --archive
 python3 scripts/cli.py runner --archive            # 主升期/回调击球区/深调考验区五阶段
 
@@ -90,8 +97,9 @@ tenscreener/
 │   ├── l3_evaluator.py        # L3 TPS 评估 + 报告(含三线四季表)
 │   ├── kline.py               # 腾讯前复权日K封装(免额度,缓存+离线哨兵)
 │   ├── runner.py              # 右侧趋势中继:scan 五阶段 + backtest 时间线
-│   └── cli.py                 # 统一入口(screen/l1/l2/l3/watch/track/runner)
-├── tests/                     # 82 用例 + 若羽臣四时点回放 + 双股票 runner 上涨期间识别验收
+│   ├── judge.py               # 单标的分级判定(Stage1硬闸/深读/素材包/条件发布)
+│   └── cli.py                 # 统一入口(judge/screen/l1/l2/l3/watch/track/runner)
+├── tests/                     # 114 用例 + Stage1硬闸 + 若羽臣四时点回放 + 双股票 runner 验收
 ├── references/
 │   ├── canslim-checklist.md   # CAN SLIM 七要素
 │   ├── jingshui-checklist.md  # 静水超级成长股清单
