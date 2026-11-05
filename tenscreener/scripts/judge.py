@@ -162,9 +162,13 @@ def _http_json(url, referer="https://data.eastmoney.com", timeout=15):
 
 
 def _sec_rows(report, code, sort="REPORT_DATE", extra_filter=None):
-    """datacenter(securities) host 通用取数(FREEHOLDERS/HOLDERNUM/GBALANCE 实测可用)。"""
+    """datacenter(securities) host 通用取数(FREEHOLDERS/HOLDERNUM/GBALANCE 实测可用)。
+    坑: RPT_F10_BASIC_ORGINFO 不能带 sortColumns(返回空, earnings-reader 实测同款坑) → sort=None 时省略。"""
     p = {"reportName": report, "columns": "ALL", "pageSize": 40, "pageNumber": 1,
-         "sortColumns": sort, "sortTypes": -1, "filter": '(SECUCODE="%s")' % _secu(code)}
+         "filter": '(SECUCODE="%s")' % _secu(code)}
+    if sort:
+        p["sortColumns"] = sort
+        p["sortTypes"] = -1
     if extra_filter:
         p["filter"] = extra_filter
     u = SEC_HOST + "?" + urllib.parse.urlencode(p)
@@ -398,16 +402,20 @@ def main_composition(code, thick_labels):
 
 def quote(code):
     secid = ("1." if str(code)[0] in "69" else "0.") + str(code).split(".")[0]
-    try:
-        d = _http_json("https://push2.eastmoney.com/api/qt/ulist.np/get?"
-                       + urllib.parse.urlencode({"secids": secid, "fields": "f12,f14,f2,f3,f9,f20,f21",
-                                                 "ut": "fa5fd1943c7b386f172d6893dbfba10b"}))
-        it = ((d.get("data") or {}).get("diff") or [{}])[0]
-        return {"name": it.get("f14"), "price": (it.get("f2") / 100) if isinstance(it.get("f2"), (int, float)) else None,
-                "mcap_yi": _yi(it.get("f20")), "pe": (it.get("f9") / 100) if isinstance(it.get("f9"), (int, float)) else None}
-    except Exception as e:
-        degrade("quote", str(e)[:60])
-        return {}
+    for attempt in (1, 2):   # push2 间歇断连实测 → 重试一次
+        try:
+            d = _http_json("https://push2.eastmoney.com/api/qt/ulist.np/get?"
+                           + urllib.parse.urlencode({"secids": secid, "fields": "f12,f14,f2,f3,f9,f20,f21",
+                                                     "ut": "fa5fd1943c7b386f172d6893dbfba10b"}))
+            it = ((d.get("data") or {}).get("diff") or [{}])[0]
+            return {"name": it.get("f14"), "price": (it.get("f2") / 100) if isinstance(it.get("f2"), (int, float)) else None,
+                    "mcap_yi": _yi(it.get("f20")), "pe": (it.get("f9") / 100) if isinstance(it.get("f9"), (int, float)) else None}
+        except Exception as e:
+            if attempt == 1:
+                time.sleep(1)
+                continue
+            degrade("quote", str(e)[:60])
+            return {}
 
 
 def price_metrics(code):
@@ -639,7 +647,12 @@ def build_pack(code, outdir, with_pdf=True, pdf_dir=None):
     os.makedirs(outdir, exist_ok=True)
     q = quote(code)
     code6 = str(code).split(".")[0]
-    name = q.get("name") or code6
+    name = q.get("name")
+    if not name:
+        # 名称兜底: F10 公司简介的证券简称(防归档目录退化成 代码_代码; ORGINFO 不带 sort)
+        rows = _sec_rows("RPT_F10_BASIC_ORGINFO", code6, sort=None)
+        name = (rows[0] or {}).get("SECURITY_NAME_ABBR") if rows else None
+    name = name or code6
     reports, all_periods = four_reports(code6)
     thick_labels = [r["label"] for r in reports if r["thick"]]
 
