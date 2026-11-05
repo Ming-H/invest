@@ -130,6 +130,14 @@ class TestRender(unittest.TestCase):
         self.assertEqual(P.doc_title("中报", "2026-08-28", "2026-08-30", 9),
                          "中报监测日报 08-28~08-30(9家)")
 
+    def test_zero_disclosure_doc(self):
+        """零披露窗口(节假日)出 0 家报告, 与'数据源挂了'区分。"""
+        md = P.gen_report([], [], "东财", 0, "2026-10-03", "2026-10-03", "三季报", 2026, 3)
+        self.assertIn("# 三季报监测日报 2026-10-03(0家)", md)
+        self.assertIn("过闸 **0 家**", md)
+        self.assertNotIn("## ⏰", md)
+        self.assertNotIn("## 未过闸", md)
+
     def test_gen_report_sections(self):
         passed = self._passed()
         md = P.gen_report(passed, [{"code": "688676", "name": "金盘科技",

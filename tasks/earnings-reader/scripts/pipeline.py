@@ -430,8 +430,9 @@ def cmd_run(a):
         return 1
     rpt, season = data.detect_period(f_rows, w_rows)
     if not rpt:
-        log("报告期识别失败, 退出")
-        return 1
+        # 零披露窗口(如节假日): 按窗口月份推断季节, 出 0 家报告(对齐历史监测日报系列)
+        rpt, season = data._season_tag(start, end)
+        log("① 清单: %s源 窗口零披露 | 报告期按月推断=%s(%s)" % (src, rpt, season))
     f_rows = [r for r in f_rows if str(r.get("REPORTDATE") or "")[:10] == rpt]
     y, q = quarter_of(rpt)
     log("① 清单: %s源 正式%d行 | 报告期=%s(%s)" % (src, len(f_rows), rpt, season))

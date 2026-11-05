@@ -26,6 +26,8 @@ UA = {"User-Agent": "Mozilla/5.0"}
 
 # 本次运行的降级清单 [(函数, 细节)], pipeline 读走后落 manifest
 DEGRADED = []
+# 东财本次运行是否至少成功一页(HTTP 可达)。可达+0行=真零披露(如节假日), 与"挂了"区分。
+EM_OK = False
 
 
 def degrade(fn, why):
@@ -80,6 +82,7 @@ def em_pages(report, date_field, start, end):
     3. 行键去重 + 固定点停页(某页零新键即停)双保险; 30 页保险丝。
     date_field 参数保留给调用方记账, 过滤条件不用它。"""
     _ = date_field
+    global EM_OK
     seen, pn = {}, 1
     while pn <= 30:
         try:
@@ -88,6 +91,7 @@ def em_pages(report, date_field, start, end):
                           "filter": "(NOTICE_DATE>='%s')(NOTICE_DATE<='%s 23:59:59')" % (start, end)})
         except Exception:
             break
+        EM_OK = True
         r = (d.get("result") or {}).get("data") or []
         if not r:
             break
@@ -187,10 +191,12 @@ def iw_lists(start, end):
 
 
 def disclosure_lists(start, end):
-    """-> (formal_rows, forecast_rows, src)。东财挂了走问财备源。"""
+    """-> (formal_rows, forecast_rows, src)。东财可达即用(0行=真零披露如节假日, 不耗
+    问财额度); 完全不可达才走问财备源。src None = 全挂。"""
+    global EM_OK
     f_rows = em_pages("RPT_LICO_FN_CPD", "REPORTDATE", start, end)
     w_rows = em_pages("RPT_PUBLIC_OP_NEWPREDICT", "REPORT_DATE", start, end)
-    if f_rows or w_rows:
+    if EM_OK:
         return f_rows, w_rows, "东财"
     f2, w2 = iw_lists(start, end)
     if f2 or w2:
