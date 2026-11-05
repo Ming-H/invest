@@ -34,7 +34,7 @@
 
 | 技能 | 层 | 定位 | 输入 | 输出 | 明确不做 |
 |---|---|---|---|---|---|
-| earnings-reader | 引擎·**季频任务**(编排器) | 对指定日期披露跑完整流程: ①40%+卫生闸门 ②近4季同比环比表 ③调 tenscreener judge 判定 ④汇总输出 | 指定日期全市场披露 | 标的池 Base(带阶段/跟踪标注)+财报文档 | 不自建第二套判断(framework.py 仅兜底); 价格不决定入池资格只影响阶段标注 |
+| earnings-reader | 引擎·**季频任务**(编排器) | 对指定日期披露跑单段式确定性流程(v3, 2026-11-05): ①40%三线闸门 ②近4季三线表 ③监测日报+台账入库 | 指定日期全市场披露 | 「重点跟踪标的」Base + 「财报记录」监测日报文档 | 不做判定(深判归 tenscreener judge); 不读财报正文/催化; 不处理业绩预告 |
 | tenscreener | 引擎·**判断权威**(工具+生命周期) | judge: 代码→判定(是否十倍候选/七阶段/TPS/三线形态/信号); 外加 runner 右侧扫描 + watch/track | 单代码/右侧全市场 | 判定JSON/亮灯名单/confirm/exit信号 | 不做全市场基本面初筛(scout 二期改读池); 不给指令 |
 | a-share-review | 引擎·**日频哨兵** | 池内标的价格/资金/事件 + 公告雷达解读(v2.3) + 回检 | 当日行情+watchlist+新公告 | 复盘文档/全息卡/E1预警/公告解读 | 不发现新标的; 不做判断(归 judge) |
 | jingshui | 方法论·总典 | 静水宪法(40%线/5不买/纪律)+六段式深读 | 问题/财报PDF | 框架/六段式报告 | 存标准不执行(执行归 judge) |
@@ -48,7 +48,7 @@
 
 **边界裁决**: 全市场闸门与四季表=earnings-reader; 十倍判定(候选/阶段/TPS/信号)=tenscreener judge; 价格位置=judge 内嵌; 日常异动+公告=a-share-review; 单股深读=jingshui; 方法标准=三部典存而不执行; 买卖=永远人工。
 
-**待接线(v3 落地四步+原有两项)**: ① tenscreener judge 子命令(组装 quarters/scorer/monitor/runner) ② earnings-reader 接 judge, framework.py 转兜底 ③ 池加〔阶段/TPS/跟踪〕列, 状态机对齐 ④ scout 改读池 ⑤ a-share-review ★标注切新池 ⑥ lynch 分类入池标签。
+**待接线(v3 落地四步+原有两项)**: ① tenscreener judge 子命令(组装 quarters/scorer/monitor/runner) ~~② earnings-reader 接 judge~~(2026-11-05 用户重定流程作废: earnings-reader 纯确定性筛选, 判定不接线) ③ 池加〔阶段/TPS/跟踪〕列, 状态机对齐 ④ scout 改读池 ⑤ a-share-review ★标注切新池 ⑥ lynch 分类入池标签。
 
 ## 接口约定（引擎间只通过这三种介质协作，禁止跨技能 import 代码）
 
@@ -84,8 +84,9 @@
 | 流 | 飞书目录 | token 配置位置 |
 |---|---|---|
 | 日频复盘(a-share-review) | 「A股复盘」 | 各自 outputs/feishu_folder.json(历史机制) |
-| 季报阅读(earnings-reader) | 「财报阅读」 | cache/pool_base.json 的 doc_folder |
+| 季报阅读(earnings-reader) | 「财报记录」 | pipeline.py FEISHU 默认值(cache/feishu.json 可覆盖) |
 | 十倍股判定(tenscreener judge) | 「十倍股判定」 | cache/config.json 的 judge_folder |
-| 标的池 Base | 我的空间根目录 | cache/pool_base.json(跨引擎唯一真源) |
+| earnings-reader 台账 | 「重点跟踪标的」Base(在财报记录文件夹内, 2026-11-05 用户指定) | 同上 pipeline.py FEISHU |
+| 标的池 Base | 我的空间根目录 | cache/pool_base.json(跨引擎唯一真源; earnings-reader v3 起不再写此表) |
 
-「投资相关」「财报记录」为历史存档目录(h1-monitor 时代监测日报), 不再新增。新建文件夹需用户明示。
+「投资相关」为历史存档目录(h1-monitor 时代监测日报), 不再新增。「财报记录」原为历史存档, 2026-11-05 用户指定改为季报阅读文档落点。新建文件夹需用户明示。

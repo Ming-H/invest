@@ -123,6 +123,29 @@ class TestVerdict(unittest.TestCase):
         for kw in ("十倍股判定报告", "是否十倍股候选: 是", "所处阶段: 主升期", "静水核心因子"):
             self.assertIn(kw, md)
 
+    def test_render_report_contains_quarterly_table(self):
+        """报告须含近4季三线明细表(2026-11-05 用户反馈补充)。"""
+        pack = {"name": "测试", "code": "000000", "asof": "2026-11-05", "stage_pre": ["主升期", "x"],
+                "quarterly_table": [
+                    {"label": "2026Q2", "single_yi": (140.0, 70.0, 56.0), "qoq": (27.3, 27.3, 27.3)},
+                    {"label": "2026Q3", "single_yi": (150.0, 90.0, 60.0), "qoq": (7.1, 28.6, 7.1)}],
+                "qs": {"rev_yoy": {"2026Q3": 38.0}, "parent_yoy": {"2026Q3": 136.7}, "deduct_yoy": {"2026Q3": 49.9}},
+                "analysis": {"pass_lines": {"labels": ["归母", "扣非"], "count": 2}, "streak_max": 3,
+                             "resonance": "profit_led", "rev_accel": True,
+                             "divergence": {"flag": "无"}}}
+        v = {"stage": "主升期", "confidence": "高", "is_tenbagger_candidate": True,
+             "stage_reason": "r", "conclusion": "过", "lynch_class": "快速增长", "lynch_reason": "l",
+             "jingshui_core7": [{"no": 1, "item": "i", "verdict": "✓", "evidence": "e"}],
+             "jingshui_5no": [{"no": 1, "item": "n", "verdict": "否"}],
+             "canslim": {k: "✓" for k in ("C", "A", "N", "S", "L", "I", "M")}}
+        md = judge.render_report(pack, v, [])
+        self.assertIn("近4季财务三线", md)
+        self.assertIn("| 2026Q3 | 150.0 | +38.0 | +7.1 | 90.0 | +136.7 | +28.6 | 60.0 | +49.9 | +7.1 |", md)
+        self.assertIn("三线过线: 归母/扣非(2/3)", md)
+        # 无季度数据的旧 pack 不崩, 仅跳过该节
+        md2 = judge.render_report({"name": "t", "code": "1", "asof": "d"}, dict(v), [])
+        self.assertNotIn("近4季财务三线", md2)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

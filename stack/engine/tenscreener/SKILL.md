@@ -55,6 +55,7 @@ TPS = 0.30·F1行业空间 + 0.20·F2终点可达 + 0.15·F3市值衰减
 2. **Claude 判定**: 读 pack.md, 结合 `../jingshui/references/财报分析框架.md`(核心因子7条+5不买)、`../can-slim/SKILL.md`(七要素)、`../lynch/SKILL.md`(六分类) 写同目录 `verdict.json`(schema 见 pack.md 第八节; 校验失败走确定性兜底不阻塞)
 3. `python3 scripts/cli.py judge --code 603259 --publish` —— 校验+组装+**发布飞书文档**并清理中间产物
    (本地只留最终 report.md + feishu_url.txt; 中间件 pack/verdict/texts 发布成功即清)。
+   发布报告含**近4季财务三线明细表**(单季营收/归母/扣非 亿+同比%+环比%, F10自算; 2026-11-05 用户反馈补充)。
    飞书文件夹: `--folder <token>` 首次指定后持久(存 cache/config.json 的 judge_folder), 未配置落我的空间根目录。
    仅组装不发布用 `--finalize`。
 

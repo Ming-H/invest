@@ -37,19 +37,21 @@
 
 ## 3. 飞书落点
 
-**约定（2026-11-04 用户定）：文档与 Base 一律放「我的空间根目录」，与历史分析文档（h1-monitor 三季报监测日报系列等）同级；不新建文件夹。**
+**约定（2026-11-05 用户定版，取代 2026-11-04 根目录约定）：三条流三个家。**
 
 | 资源 | 位置 |
 |---|---|
-| earnings-reader 财报阅读文档《YYYY年M月D日 财报阅读》 | 根目录 |
-| 标的池 Base（跨引擎共享，见 §4） | 根目录，token 记 cache/pool_base.json |
+| earnings-reader 监测日报《{季}报监测日报 YYYY-MM-DD(N家)》 | 「财报记录」文件夹 `AXJlff1ogl42bLdUarccrWGFn8g`（对齐 h1-monitor 监测日报系列） |
+| earnings-reader 台账「重点跟踪标的」Base | 财报记录文件夹内，`J8RGbNZobaXu9VsqtFWcKUemnQe`/`tblpQXsYDpVfIhUD`（2026-11-05 用户指定, 沿用其字段命名, 见 §4B） |
+| 标的池 Base（跨引擎共享，见 §4） | 根目录，token 记 cache/pool_base.json（earnings-reader v3 起不再写此表） |
 | a-share-review 复盘文档 | 其既有「A股复盘」文件夹（历史约定，不新建设） |
+| tenscreener judge 判定文档 | 「十倍股判定」文件夹（cache/config.json 的 judge_folder） |
 
 通道：lark-cli（用户身份）。建 Base 用 `base +base-create --name --table-name --fields`（一次建库+首表+字段；`+app-create` 是 BaseApp 专用勿用）。
 
 ## 4. 标的池 Base
 
-列结构（earnings-reader 首次运行自动建表，其他引擎只读/按约定写）：
+列结构（earnings-reader v2 首次运行自动建表；v3 起 earnings-reader 改写「重点跟踪标的」, 此表由 tenscreener/a-share-review 侧继续使用）：
 
 | 列 | 类型 | 写入方 |
 |---|---|---|
@@ -62,6 +64,10 @@
 | 阶段 / 驱动 / 一句话 | text | earnings-reader（L2 判定） |
 | 状态 | single_select: 观察/深研/已买/已剔 | **人**（默认观察） |
 | 报告链接 | text | 引擎 |
+
+## 4B. 重点跟踪标的 Base（earnings-reader v3 台账, 2026-11-05）
+
+沿用 h1-monitor 时代既有表（用户指定），字段命名以表内现状为准：股票代码（带后缀如 `688380.SH`，upsert 依据）/ 股票名称 / 营收同比%·归母同比%·扣非同比%（number，可算才写）/ 来源报告（`YYYY-MM-DD {季}报监测日报`）/ 档位（`第一档>40%`）/ 状态（`跟踪中`，**人**流转）/ 首次纳入（datetime，只在新建时写）/ 更新日期 / 报告链接（裸 URL）。更新已有记录不覆盖 状态/首次纳入。
 
 ## 5. 呈现与术语
 

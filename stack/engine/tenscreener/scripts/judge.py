@@ -951,6 +951,33 @@ def render_report(pack, verdict, errs):
           "- **阶段预判(纯算法对照)**: %s" % (pack.get("stage_pre") or ("—",))[0],
           "- **清单结论: %s**" % verdict.get("conclusion", "—"),
           "- **林奇分类: %s** —— %s" % (verdict.get("lynch_class"), verdict.get("lynch_reason")), ""]
+    qt = p.get("quarterly_table") or []
+    qs = p.get("qs") or {}
+    if qt:
+        L += ["", "## 近4季财务三线(单季, F10自算)", "",
+              "| 季 | 营收(亿) | 同比% | 环比% | 归母(亿) | 同比% | 环比% | 扣非(亿) | 同比% | 环比% |",
+              "|---|---|---|---|---|---|---|---|---|---|"]
+
+        def _n(v):
+            return ("%.1f" % v) if isinstance(v, (int, float)) else "—"
+
+        def _y(v):
+            return _fmt_yoy(v).replace("%", "")   # None → 扭亏/NA
+
+        def _q(v):
+            return ("%+.1f" % v) if isinstance(v, (int, float)) else "—"
+
+        for t in qt:
+            sy, qq = t.get("single_yi") or (None,) * 3, t.get("qoq") or (None,) * 3
+            yy = [(qs.get(k) or {}).get(t["label"]) for k in ("rev_yoy", "parent_yoy", "deduct_yoy")]
+            L.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
+                t["label"], _n(sy[0]), _y(yy[0]), _q(qq[0]),
+                _n(sy[1]), _y(yy[1]), _q(qq[1]), _n(sy[2]), _y(yy[2]), _q(qq[2])))
+        ana = p.get("analysis")
+        if ana:
+            L += ["", "- 三线过线: %s(%d/3) · 最长连续 %d 季 · 形态 %s · 加速 %s · 扣非背离: %s" % (
+                "/".join(ana["pass_lines"]["labels"]) or "无", ana["pass_lines"]["count"],
+                ana["streak_max"], ana["resonance"], ana["rev_accel"], ana["divergence"]["flag"])]
     L += ["## 静水核心因子 7 条", "", "| # | 因子 | 判定 | 依据 |", "|---|---|---|---|"]
     for it in verdict.get("jingshui_core7", []):
         L.append("| %s | %s | %s | %s |" % (it.get("no"), it.get("item"), it.get("verdict"), it.get("evidence", "")))
