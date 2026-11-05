@@ -88,7 +88,7 @@ def cmd_judge(args):
         if ok:
             print("报告已组装: %s" % path)
         return
-    pack, d = _j.build_pack(args.code, outdir)
+    pack, d = _j.build_pack(args.code, outdir, with_pdf=not getattr(args, "no_pdf", False))
     print("素材包完成: %s/pack.md | 报告%d份 | 降级%d项"
           % (d, len(pack.get("report_texts_meta") or []), len(_j.DEGRADED)), file=sys.stderr)
     print("下一步: Claude 读 pack.md(结合 jingshui/can-slim/lynch 标准) → 写 %s/verdict.json → 再跑 --finalize" % d)
@@ -587,6 +587,8 @@ def build_parser():
     jp.add_argument("--code", "-c", required=True, help="股票代码(6位, 可带后缀)")
     jp.add_argument("--finalize", action="store_true",
                     help="校验 verdict.json 并组装 report.md(默认=取数产素材包)")
+    jp.add_argument("--no-pdf", action="store_true",
+                    help="快速模式: 跳过财报PDF下载与章节抽取, 纯API素材包(MD&A/募投/风险全文将缺席)")
     jp.set_defaults(func=cmd_judge)
 
     return p

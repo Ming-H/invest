@@ -189,6 +189,30 @@ def balance_leads(code, n=5):
     return out
 
 
+INC_FIELDS = (("FAIRVALUE_CHANGE_INCOME", "公允价值变动收益"), ("INVEST_INCOME", "投资收益"),
+              ("INVEST_JOINT_INCOME", "其中联营合营"), ("ASSET_DISPOSAL_INCOME", "资产处置收益"),
+              ("NONBUSINESS_INCOME", "营业外收入"), ("NONBUSINESS_EXPENSE", "营业外支出"))
+
+
+def income_leads(code, n=4):
+    """利润表非经常主干(近n报告期): 归母vs扣非背离的拆解依据(公允价值/投资收益/处置/营业外)。
+    逐项附注明细(政府补助细项等)仍需 PDF, 但主干足以判断'利润水分来源'量级。"""
+    rows = _sec_rows("RPT_F10_FINANCE_GINCOME", code)[:n * 2]
+    out = []
+    for r in rows:
+        rd = (r.get("REPORT_DATE") or "")[:10]
+        if len(rd) < 7:
+            continue
+        y, m = int(rd[:4]), int(rd[5:7])
+        q = {3: 1, 6: 2, 9: 3, 12: 4}.get(m)
+        if not q:
+            continue
+        out.append({"label": "%dQ%d" % (y, q), **{cn: _yi(r.get(k)) for k, cn in INC_FIELDS}})
+        if len(out) >= n:
+            break
+    return out
+
+
 def holders_shift(code):
     """十大流通股东最新两期 diff(新进/退出/增减) + 股东户数近5期趋势。"""
     fh = _sec_rows("RPT_F10_EH_FREEHOLDERS", code)[:12]
@@ -483,7 +507,7 @@ def consensus(code, outdir):
 
 # ============ ⑥ 素材包渲染 ============
 
-def build_pack(code, outdir):
+def build_pack(code, outdir, with_pdf=True):
     """全量取数 → pack.json + pack.md。返回 (pack, outdir) 或 (None, errors)。"""
     os.makedirs(outdir, exist_ok=True)
     q = quote(code)
@@ -514,13 +538,14 @@ def build_pack(code, outdir):
     if ana and m:
         from runner import classify_phase
         stage_pre = classify_phase(m, ana, gate.get("verdict"), forecast=fc)
-    texts = fetch_report_texts(code6, name, reports, outdir)
+    texts = fetch_report_texts(code6, name, reports, outdir) if with_pdf else []
+    inc = income_leads(code6)
     cons = consensus(code6, outdir)
 
     pack = {"code": code6, "name": name, "asof": date.today().isoformat(),
             "quote": q, "reports": [{k: r[k] for k in ("label", "cn", "thick", "has_data")} for r in reports],
             "qs": qs, "analysis": ana, "quarterly_table": qt,
-            "quality": qual, "balance_leads": bal, "holders": hold,
+            "quality": qual, "balance_leads": bal, "income_leads": inc, "holders": hold,
             "composition": comp, "price": m, "market_gate": gate,
             "forecast": fc, "stage_pre": stage_pre, "consensus": cons,
             "report_texts_meta": [{k: t[k] for k in ("label", "cn", "thick")} for t in texts],
@@ -595,6 +620,12 @@ def _render_pack_md(pack, texts):
         keys = ["合同负债", "存货", "应收账款", "货币资金", "有息负债", "商誉"]
         rows = [[b["label"]] + [b.get(k) for k in keys] for b in reversed(bal)]
         L += _tbl(["期"] + keys, rows) + [""]
+    inc = p.get("income_leads") or []
+    if inc:
+        L += ["## 三B、非经常主干(利润表, 背离拆解依据, 亿)", ""]
+        ikeys = ["公允价值变动收益", "投资收益", "其中联营合营", "资产处置收益", "营业外收入", "营业外支出"]
+        irows = [[b["label"]] + [b.get(k) for k in ikeys] for b in reversed(inc)]
+        L += _tbl(["期"] + ikeys, irows) + [""]
 
     hold = p.get("holders") or {}
     d = hold.get("top10_diff")
