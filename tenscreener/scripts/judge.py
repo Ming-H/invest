@@ -29,6 +29,7 @@ from datetime import date, datetime
 from emoney import (f10_periods, predicts, forecast_signal)
 from quarters import latest_report_period, last_n_quarters, q_label, q_cn, analyze_quarterly
 import kline
+import trend
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUTROOT = os.path.join(os.path.dirname(HERE), "outputs", "judge")
@@ -43,6 +44,39 @@ CNINFO_CLI_CANDIDATES = [
 ]
 
 DEGRADED = []
+
+# PDF 归档路径四级解析(用户定版 2026-11-05, 技能已公开他人路径各异):
+#   --pdf-dir 单次指定(同时持久化为默认) > 环境变量 TENSCREENER_PDF_DIR
+#   > cache/config.json 持久默认 > 兜底 outputs/pdf_library(零配置可用)
+PDF_ENV = "TENSCREENER_PDF_DIR"
+PDF_CFG = os.path.join(os.path.dirname(HERE), "cache", "config.json")
+DEFAULT_PDF_LIB = os.path.join(OUTROOT, "pdf_library")
+
+
+def resolve_pdf_dir(cli_val=None):
+    """-> (dir, 来源)。cli_val 显式传入时持久化到 cache/config.json(首次指定即默认)。"""
+    if cli_val:
+        try:
+            os.makedirs(os.path.dirname(PDF_CFG), exist_ok=True)
+            cfg = {}
+            if os.path.exists(PDF_CFG):
+                cfg = json.load(open(PDF_CFG, encoding="utf-8"))
+            cfg["pdf_dir"] = cli_val
+            json.dump(cfg, open(PDF_CFG, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        except Exception:
+            pass
+        return cli_val, "本次指定(已记住为默认)"
+    env = os.environ.get(PDF_ENV)
+    if env:
+        return env, "环境变量"
+    if os.path.exists(PDF_CFG):
+        try:
+            v = json.load(open(PDF_CFG, encoding="utf-8")).get("pdf_dir")
+            if v:
+                return v, "持久配置"
+        except Exception:
+            pass
+    return DEFAULT_PDF_LIB, "默认(首次使用可 --pdf-dir 指定并记住)"
 
 
 def degrade(fn, why):
@@ -354,62 +388,60 @@ def _cninfo_cli():
 TYPE_BY_Q = {1: "q1", 2: "semi", 3: "q3", 4: "annual"}
 
 
-def fetch_report_texts(code, name, reports, outdir):
-    """经 cninfo-disclosure 底座下载最近4份财报 → pdftotext → 切章节。
-    返回 [{label, cn, thick, chapters:{mda/募投/风险/非经常/股东: text}}]。"""
+def fetch_report_texts(code, name, reports, outdir, pdf_dir=None):
+    """经 cninfo-disclosure 底座下载厚报告 PDF → pdftotext → 切章节。
+    PDF **归档不删除**(沉淀到 pdf_dir/{名称}_{代码}/); 已存在同名报告跳过下载(幂等缓存)。"""
     cli = _cninfo_cli()
     if not cli:
         degrade("fetch_report_texts", "cninfo-disclosure cli 未找到(探测: %s)" % "; ".join(CNINFO_CLI_CANDIDATES[:2]))
         return []
-    pdfdir = os.path.join(outdir, "pdf")
-    os.makedirs(pdfdir, exist_ok=True)
+    archive = os.path.join(pdf_dir or DEFAULT_PDF_LIB, "%s_%s" % (name, str(code).split(".")[0]))
+    os.makedirs(archive, exist_ok=True)
     out = []
     for rp in reports:
         # 只下厚报告(年报/半年报): PDF 只为 MD&A 叙述层(募投/风险/展望)服务;
         # 薄报告(季报)的主要数据/股东信息/报表全走 API, 不再下载(2026-11-05 定版)
         if not rp.get("has_data") or not rp.get("thick"):
             continue
-        ok_txt = None
-        for attempt in (1, 2):        # 巨潮限速(连发多份时间歇拦截) -> 间歇重试一次
-            try:
-                before = set(os.listdir(pdfdir))
-                # 坑(实测): cli 把 -o 当相对路径拼在其自身 cwd 后 —— 传绝对路径会落进
-                # pdf/pdf/... 嵌套目录。可靠组合 = cwd=pdfdir + -o .
-                p = subprocess.run([sys.executable, cli, "download", "--stock", str(code).split(".")[0],
-                                    "--year", str(rp["y"]), "--type", TYPE_BY_Q[rp["q"]],
-                                    "-o", ".", "--timeout", "30"],
-                                   capture_output=True, timeout=180, cwd=pdfdir)
-                # cli 的 downloaded 字段不是可靠路径(实测返回 1) -> 按目录差集找新 PDF(免疫输出形态)
-                new = sorted((f for f in set(os.listdir(pdfdir)) - before if f.lower().endswith(".pdf")),
-                             key=lambda f: -os.path.getmtime(os.path.join(pdfdir, f)))
-                if not new:
-                    if attempt == 1:
-                        time.sleep(3)
-                        continue
-                    degrade("fetch_report_texts", "%s 下载失败: %s | %s"
-                            % (rp["cn"], (p.stderr or b"").decode("utf-8", "ignore")[:60],
-                               (p.stdout or b"").decode("utf-8", "ignore").replace(chr(10), " ")[:120]))
+        # 归档命中则免下载(幂等: 二次判定同标的零下载零限速)
+        key = "半年度报告" if rp["q"] == 2 else "年度报告"
+        hit = [f for f in os.listdir(archive) if key in f and str(rp["y"]) in f and f.lower().endswith(".pdf")]
+        path = os.path.join(archive, hit[0]) if hit else None
+        if not path:
+            ok = None
+            for attempt in (1, 2):    # 巨潮限速间歇拦截 → 重试一次
+                try:
+                    before = set(os.listdir(archive))
+                    # 坑(实测): cli 把 -o 当相对路径拼自身 cwd —— 可靠组合 = cwd=归档目录 + -o .
+                    p = subprocess.run([sys.executable, cli, "download", "--stock", str(code).split(".")[0],
+                                        "--year", str(rp["y"]), "--type", TYPE_BY_Q[rp["q"]],
+                                        "-o", ".", "--timeout", "30"],
+                                       capture_output=True, timeout=180, cwd=archive)
+                    new = sorted((f for f in set(os.listdir(archive)) - before if f.lower().endswith(".pdf")),
+                                 key=lambda f: -os.path.getmtime(os.path.join(archive, f)))
+                    if not new:
+                        if attempt == 1:
+                            time.sleep(3)
+                            continue
+                        degrade("fetch_report_texts", "%s 下载失败: %s | %s"
+                                % (rp["cn"], (p.stderr or b"").decode("utf-8", "ignore")[:60],
+                                   (p.stdout or b"").decode("utf-8", "ignore").replace(chr(10), " ")[:100]))
+                        break
+                    ok = os.path.join(archive, new[0])
                     break
-                path = os.path.join(pdfdir, new[0])
-                txt = _pdf_text(path)
-                if not txt:
-                    os.remove(path)
-                    if attempt == 1:
-                        time.sleep(2)
-                        continue
-                    degrade("fetch_report_texts", "%s 转文本失败" % rp["cn"])
-                    break
-                ok_txt = (rp, txt, path)
-                break
-            except Exception as e:
-                if attempt == 2:
-                    degrade("fetch_report_texts", "%s: %s" % (rp["cn"], str(e)[:70]))
-        if ok_txt:
-            rp2, txt, path = ok_txt
-            out.append({"label": rp2["label"], "cn": rp2["cn"], "thick": rp2["thick"],
-                        "chapters": _split_chapters(txt, thick=rp2["thick"])})
-            os.remove(path)
-        time.sleep(1.0)
+                except Exception as e:
+                    if attempt == 2:
+                        degrade("fetch_report_texts", "%s: %s" % (rp["cn"], str(e)[:70]))
+            time.sleep(1.0)
+            path = ok
+        if not path:
+            continue
+        txt = _pdf_text(path)
+        if not txt:
+            degrade("fetch_report_texts", "%s 转文本失败(PDF 已归档保留: %s)" % (rp["cn"], path))
+            continue
+        out.append({"label": rp["label"], "cn": rp["cn"], "thick": rp["thick"],
+                    "pdf": path, "chapters": _split_chapters(txt, thick=True)})
     return out
 
 
@@ -534,7 +566,7 @@ def consensus(code, outdir):
 
 # ============ ⑥ 素材包渲染 ============
 
-def build_pack(code, outdir, with_pdf=True):
+def build_pack(code, outdir, with_pdf=True, pdf_dir=None):
     """全量取数 → pack.json + pack.md。返回 (pack, outdir) 或 (None, errors)。"""
     os.makedirs(outdir, exist_ok=True)
     q = quote(code)
@@ -565,10 +597,22 @@ def build_pack(code, outdir, with_pdf=True):
     if ana and m:
         from runner import classify_phase
         stage_pre = classify_phase(m, ana, gate.get("verdict"), forecast=fc)
-    texts = fetch_report_texts(code6, name, reports, outdir) if with_pdf else []
+    pdf_dir_resolved, pdf_src = resolve_pdf_dir(pdf_dir)
+    texts = fetch_report_texts(code6, name, reports, outdir, pdf_dir=pdf_dir_resolved) if with_pdf else []
     inc = income_leads(code6)
     cf = cashflow_leads(code6)
     cons = consensus(code6, outdir)
+
+    # ── 跨期趋势挖掘(确定性记分卡, 2026-11-05 用户定版: 单期是体检, 跨期才是趋势) ──
+    jyps_list = comp.get("jyps") or []
+    guidance = trend.extract_guidance(texts, jyps_list)
+    gv = trend.guidance_verdict(guidance, "收入") or {}
+    gv2 = trend.guidance_verdict(guidance, "净利") or {}
+    fh_rows = _sec_rows("RPT_F10_EH_FREEHOLDERS", code6)[:30]
+    holders_tl = trend.holders_timeline(fh_rows)
+    kw = trend.keyword_matrix(texts, jyps_list)
+    leads = trend.leads_verdict(bal, inc, cf, qs.get("periods") or [])
+    card = trend.scorecard(gv, kw, holders_tl, leads, ana)
 
     pack = {"code": code6, "name": name, "asof": date.today().isoformat(),
             "quote": q, "reports": [{k: r[k] for k in ("label", "cn", "thick", "has_data")} for r in reports],
@@ -576,6 +620,9 @@ def build_pack(code, outdir, with_pdf=True):
             "quality": qual, "balance_leads": bal, "income_leads": inc, "cashflow": cf, "holders": hold,
             "composition": comp, "price": m, "market_gate": gate,
             "forecast": fc, "stage_pre": stage_pre, "consensus": cons,
+            "trend": {"guidance": guidance, "guidance_rev": gv, "guidance_np": gv2,
+                      "holders_tl": holders_tl, "keywords": kw, "leads": leads,
+                      "scorecard": card, "pdf_dir": [pdf_dir_resolved, pdf_src]},
             "report_texts_meta": [{k: t[k] for k in ("label", "cn", "thick")} for t in texts],
             "degraded": DEGRADED}
     json.dump(pack, open(os.path.join(outdir, "pack.json"), "w", encoding="utf-8"),
@@ -702,7 +749,39 @@ def _render_pack_md(pack, texts):
     if p.get("degraded"):
         L += ["## 降级项", ""] + ["- `%s` %s" % (f, w) for f, w in p["degraded"]] + [""]
 
-    L += ["## 八、判定任务(填 verdict.json)", "",
+    # ── 八、跨期趋势记分卡(确定性代码产出, 判定必须逐条回应 —— 用户定版的确保机制) ──
+    tr = p.get("trend") or {}
+    card = tr.get("scorecard") or {}
+    if card:
+        L += ["## 八、跨期趋势记分卡(确定性代码产出, 判定必须逐条回应)", "",
+              "**综合: %s (记分 %d)**" % (card.get("verdict"), card.get("score")), "",
+              "| 信号 | 方向 | 证据 |", "|---|---|---|"]
+        for r in card.get("rows") or []:
+            L.append("| %s | %s | %s |" % (r.get("信号"), r.get("方向"), r.get("证据")))
+        L += [""]
+        gtl = (tr.get("guidance_rev") or {}).get("steps") or []
+        if gtl:
+            L += ["**收入指引时间线**: " + " → ".join(gtl), ""]
+        gtl2 = (tr.get("guidance_np") or {}).get("steps") or []
+        if gtl2:
+            L += ["**净利指引时间线**: " + " → ".join(gtl2), ""]
+        htl = (tr.get("holders_tl") or {}).get("timeline") or []
+        if htl:
+            rows_h = []
+            for t in reversed(htl):
+                ids = t.get("by_id") or {}
+                rows_h.append([t["period"], "%s家" % t.get("n_inst"),
+                               "; ".join("%s×%d" % (k, len(v)) for k, v in ids.items()) or "无机构"])
+            L += ["**十大流通股东身份时间线**(旧→新):", ""] + _tbl(["期", "机构家数", "身份构成"], rows_h) + [""]
+    kwm = tr.get("keywords") or {}
+    if kwm:
+        L += ["**表述漂移**: %s | 上升词: %s | 风险词: %s" % (kwm.get("trend"),
+              "; ".join("%s×%s" % (k, sum(v.values())) for k, v in (kwm.get("up") or {}).items()) or "无",
+              "; ".join("%s×%s" % (k, sum(v.values())) for k, v in (kwm.get("risk") or {}).items()) or "无"), ""]
+    pdir = (tr.get("pdf_dir") or ["", ""])
+    L += ["*PDF 归档: %s (%s)*" % (pdir[0], pdir[1]), ""]
+
+    L += ["## 九、判定任务(填 verdict.json)", "",
           "读上方素材 + jingshui(核心因子7条/5不买) + can-slim(七要素) + lynch(六分类)标准, 写同目录 verdict.json:",
           "```json",
           json.dumps({
@@ -715,6 +794,10 @@ def _render_pack_md(pack, texts):
               "canslim": {"C": "✓/✗/部分:证据", "A": "", "N": "", "S": "", "L": "", "I": "", "M": ""},
               "lynch_class": "快速增长/稳定增长/缓慢增长/周期/困境反转/隐蔽资产",
               "lynch_reason": "≤40字",
+              "trend_signals": {"guidance": "连续上调/上调/维持/下调/无数据",
+                                "national_team": "增强/在场/退出/无数据",
+                                "narrative": "≤40字, 对比两期MD&A措辞变化(新出现/消失了什么)",
+                                "leads": "≤40字, 先行指标综合方向"},
               "tps_qualitative": {"F1行业空间": "≤60字", "F5催化": "", "F6生意模式": ""},
               "risks": ["≤3条, 每条注明看什么指标跟踪"],
               "watch_next": ["≤3个可跟踪变量"],
@@ -765,6 +848,8 @@ def load_verdict(path):
         errs.append("lynch_class 非法 —— 标记未判定")
     for k in ("stage_reason", "lynch_reason", "conclusion"):
         v.setdefault(k, "")
+    ts = v.get("trend_signals") or {}
+    v["trend_signals"] = {k: ts.get(k) or "未判定" for k in ("guidance", "national_team", "narrative", "leads")}
     v.setdefault("tps_qualitative", {})
     v.setdefault("risks", [])
     v.setdefault("watch_next", [])
@@ -800,6 +885,20 @@ def render_report(pack, verdict, errs):
         for k, vv in tq.items():
             if vv:
                 L.append("- **%s**: %s" % (k, vv))
+    tsig = verdict.get("trend_signals") or {}
+    if tsig:
+        L += ["", "## 跨期趋势判定",
+              "",
+              "- **指引漂移**: %s" % tsig.get("guidance"),
+              "- **国家队/股东身份**: %s" % tsig.get("national_team"),
+              "- **叙述漂移(两期MD&A对比)**: %s" % tsig.get("narrative"),
+              "- **先行指标方向**: %s" % tsig.get("leads")]
+    card = ((pack.get("trend") or {}).get("scorecard") or {})
+    if card.get("rows"):
+        L += ["", "**确定性记分卡: %s (记分 %d)**" % (card.get("verdict"), card.get("score")), "",
+              "| 信号 | 方向 | 证据 |", "|---|---|---|"]
+        for r in card["rows"]:
+            L.append("| %s | %s | %s |" % (r.get("信号"), r.get("方向"), r.get("证据")))
     if verdict.get("risks"):
         L += ["", "## 风险与跟踪"] + ["- %s" % r for r in verdict["risks"]]
     if verdict.get("watch_next"):
@@ -811,14 +910,15 @@ def render_report(pack, verdict, errs):
 
 
 def finalize(code):
-    """读 pack.json + verdict.json → report.md。-> (ok, path|None)"""
+    """读 pack.json + verdict.json → report.md。-> (ok, path|None)
+    目录选择: 同代码多目录(如快速/完整模式并存)时, 优先取含 verdict.json 的最新目录。"""
     code6 = str(code).split(".")[0]
-    base = None
-    for d in sorted(os.listdir(OUTROOT), reverse=True):
-        if d.startswith(code6):
-            base = os.path.join(OUTROOT, d)
-            break
-    if not base:
+    dirs = sorted((d for d in os.listdir(OUTROOT) if d.startswith(code6 + "_")), reverse=True)
+    base = next((os.path.join(OUTROOT, d) for d in dirs
+                 if os.path.exists(os.path.join(OUTROOT, d, "verdict.json"))), None)
+    if base is None:
+        base = os.path.join(OUTROOT, dirs[0]) if dirs else None
+    if not base or not os.path.exists(os.path.join(base, "pack.json")):
         print("未找到 %s 的素材包, 先跑 judge --code" % code6)
         return False, None
     pack = json.load(open(os.path.join(base, "pack.json"), encoding="utf-8"))

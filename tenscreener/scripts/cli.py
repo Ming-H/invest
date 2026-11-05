@@ -88,7 +88,8 @@ def cmd_judge(args):
         if ok:
             print("报告已组装: %s" % path)
         return
-    pack, d = _j.build_pack(args.code, outdir, with_pdf=not getattr(args, "no_pdf", False))
+    pack, d = _j.build_pack(args.code, outdir, with_pdf=not getattr(args, "no_pdf", False),
+                            pdf_dir=getattr(args, "pdf_dir", None))
     print("素材包完成: %s/pack.md | 报告%d份 | 降级%d项"
           % (d, len(pack.get("report_texts_meta") or []), len(_j.DEGRADED)), file=sys.stderr)
     print("下一步: Claude 读 pack.md(结合 jingshui/can-slim/lynch 标准) → 写 %s/verdict.json → 再跑 --finalize" % d)
@@ -589,6 +590,8 @@ def build_parser():
                     help="校验 verdict.json 并组装 report.md(默认=取数产素材包)")
     jp.add_argument("--no-pdf", action="store_true",
                     help="快速模式: 跳过财报PDF下载与章节抽取, 纯API素材包(MD&A/募投/风险全文将缺席)")
+    jp.add_argument("--pdf-dir", default=None,
+                    help="PDF 归档目录(首次指定后持久为默认; 默认 outputs/pdf_library; 环境变量 TENSCREENER_PDF_DIR 亦可)")
     jp.set_defaults(func=cmd_judge)
 
     return p
