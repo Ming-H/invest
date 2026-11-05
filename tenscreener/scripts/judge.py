@@ -5,7 +5,7 @@ judge.py — tenscreener 单标的十倍股判定引擎（v3 判断权威, 2026-
 定位（族宪法 v3）：给一个代码，产「判定素材包」→ Claude 读包 + jingshui/can-slim/lynch
 三方法论标准 → 写 verdict.json → finalize 校验并组装报告。判定内核复用现有零件:
   emoney(F10三线/预告) + quarters(序列分析) + runner(七阶段分类) + scorer(TPS数字因子)
-新增的是「读财报」维度(两厚两薄报告章节抽取)与九类关注内容的免费取数(零问财额度):
+新增的是「读财报」维度(仅厚报告下PDF抽章节; 薄报告全走API——PDF只为MD&A叙述层服务)与九类关注内容的免费取数(零问财额度):
   资产负债表先行(合同负债/存货/货币资金/有息负债/商誉) + 主营构成(分业务/地区)
   + 十大流通股东进退 + 股东户数趋势 + 经营评述 + 价格位置 + 大盘β(免费K线版)
 
@@ -365,15 +365,19 @@ def fetch_report_texts(code, name, reports, outdir):
     os.makedirs(pdfdir, exist_ok=True)
     out = []
     for rp in reports:
-        if not rp.get("has_data"):
+        # 只下厚报告(年报/半年报): PDF 只为 MD&A 叙述层(募投/风险/展望)服务;
+        # 薄报告(季报)的主要数据/股东信息/报表全走 API, 不再下载(2026-11-05 定版)
+        if not rp.get("has_data") or not rp.get("thick"):
             continue
         ok_txt = None
         for attempt in (1, 2):        # 巨潮限速(连发多份时间歇拦截) -> 间歇重试一次
             try:
                 before = set(os.listdir(pdfdir))
+                # 坑(实测): cli 把 -o 当相对路径拼在其自身 cwd 后 —— 传绝对路径会落进
+                # pdf/pdf/... 嵌套目录。可靠组合 = cwd=pdfdir + -o .
                 p = subprocess.run([sys.executable, cli, "download", "--stock", str(code).split(".")[0],
                                     "--year", str(rp["y"]), "--type", TYPE_BY_Q[rp["q"]],
-                                    "-o", pdfdir, "--timeout", "30"],
+                                    "-o", ".", "--timeout", "30"],
                                    capture_output=True, timeout=180, cwd=pdfdir)
                 # cli 的 downloaded 字段不是可靠路径(实测返回 1) -> 按目录差集找新 PDF(免疫输出形态)
                 new = sorted((f for f in set(os.listdir(pdfdir)) - before if f.lower().endswith(".pdf")),
@@ -382,8 +386,9 @@ def fetch_report_texts(code, name, reports, outdir):
                     if attempt == 1:
                         time.sleep(3)
                         continue
-                    degrade("fetch_report_texts", "%s 下载失败: %s"
-                            % (rp["cn"], (p.stderr or b"").decode("utf-8", "ignore")[:80]))
+                    degrade("fetch_report_texts", "%s 下载失败: %s | %s"
+                            % (rp["cn"], (p.stderr or b"").decode("utf-8", "ignore")[:60],
+                               (p.stdout or b"").decode("utf-8", "ignore").replace(chr(10), " ")[:120]))
                     break
                 path = os.path.join(pdfdir, new[0])
                 txt = _pdf_text(path)
