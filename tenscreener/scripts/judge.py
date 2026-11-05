@@ -213,6 +213,28 @@ def income_leads(code, n=4):
     return out
 
 
+def cashflow_leads(code, n=4):
+    """现金流量表先行(近n报告期, 累计口径): 经营净额/投资净额/筹资净额/购建支付(capex)/
+    自由现金流≈经营净额-capex。真实FCF是盈利质量最硬的尺(比净现比更直观)。"""
+    rows = _sec_rows("RPT_F10_FINANCE_GCASHFLOW", code)[:n * 2]
+    out = []
+    for r in rows:
+        rd = (r.get("REPORT_DATE") or "")[:10]
+        if len(rd) < 7:
+            continue
+        y, m = int(rd[:4]), int(rd[5:7])
+        q = {3: 1, 6: 2, 9: 3, 12: 4}.get(m)
+        if not q:
+            continue
+        op, capex = r.get("NETCASH_OPERATE"), r.get("INVEST_PAY_CASH")
+        out.append({"label": "%dQ%d" % (y, q), "经营净额": _yi(op), "投资净额": _yi(r.get("NETCASH_INVEST")),
+                    "筹资净额": _yi(r.get("NETCASH_FINANCE")), "capex": _yi(capex),
+                    "fcf": _yi(op - capex) if isinstance(op, (int, float)) and isinstance(capex, (int, float)) else None})
+        if len(out) >= n:
+            break
+    return out
+
+
 def holders_shift(code):
     """十大流通股东最新两期 diff(新进/退出/增减) + 股东户数近5期趋势。"""
     fh = _sec_rows("RPT_F10_EH_FREEHOLDERS", code)[:12]
@@ -540,12 +562,13 @@ def build_pack(code, outdir, with_pdf=True):
         stage_pre = classify_phase(m, ana, gate.get("verdict"), forecast=fc)
     texts = fetch_report_texts(code6, name, reports, outdir) if with_pdf else []
     inc = income_leads(code6)
+    cf = cashflow_leads(code6)
     cons = consensus(code6, outdir)
 
     pack = {"code": code6, "name": name, "asof": date.today().isoformat(),
             "quote": q, "reports": [{k: r[k] for k in ("label", "cn", "thick", "has_data")} for r in reports],
             "qs": qs, "analysis": ana, "quarterly_table": qt,
-            "quality": qual, "balance_leads": bal, "income_leads": inc, "holders": hold,
+            "quality": qual, "balance_leads": bal, "income_leads": inc, "cashflow": cf, "holders": hold,
             "composition": comp, "price": m, "market_gate": gate,
             "forecast": fc, "stage_pre": stage_pre, "consensus": cons,
             "report_texts_meta": [{k: t[k] for k in ("label", "cn", "thick")} for t in texts],
@@ -626,6 +649,12 @@ def _render_pack_md(pack, texts):
         ikeys = ["公允价值变动收益", "投资收益", "其中联营合营", "资产处置收益", "营业外收入", "营业外支出"]
         irows = [[b["label"]] + [b.get(k) for k in ikeys] for b in reversed(inc)]
         L += _tbl(["期"] + ikeys, irows) + [""]
+    cf = p.get("cashflow") or []
+    if cf:
+        L += ["## 三C、现金流先行(累计口径, 亿)", ""]
+        ckeys = ["经营净额", "投资净额", "筹资净额", "capex", "fcf(经营-capex)"]
+        crows = [[b["label"]] + [b.get(k) for k in ("经营净额", "投资净额", "筹资净额", "capex", "fcf")] for b in reversed(cf)]
+        L += _tbl(["期"] + ckeys, crows) + [""]
 
     hold = p.get("holders") or {}
     d = hold.get("top10_diff")
