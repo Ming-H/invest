@@ -84,7 +84,23 @@ class TestQoqTable(unittest.TestCase):
         self.assertEqual(labels[-1], "2026Q3")
         self.assertEqual(qt[-1]["single_yi"][0], 150.0)
         self.assertEqual(qt[1]["qoq"][0], 10.0)      # Q1 环比 +10%
-        self.assertEqual(qt[0]["qoq"], (None, None, None))
+        self.assertEqual(qt[0]["qoq"], (None, None, None))  # 只有4季 → 首季环比仍缺
+
+    def test_qoq_first_quarter_uses_5th_back(self):
+        """首季环比取显示窗外上一季(2026-11-05 用户反馈: 近4季须实际取5季算环比)。"""
+        E8 = 1e8
+        singles = {"2025Q3": (80 * E8, 40 * E8, 32 * E8),
+                   "2025Q4": (100 * E8, 50 * E8, 40 * E8), "2026Q1": (110 * E8, 55 * E8, 44 * E8),
+                   "2026Q2": (140 * E8, 70 * E8, 56 * E8), "2026Q3": (150 * E8, 90 * E8, 60 * E8)}
+        qt, labels = judge.qoq_table(singles)
+        self.assertEqual(labels[0], "2025Q4")               # 显示窗仍4季
+        self.assertEqual(qt[0]["qoq"], (25.0, 25.0, 25.0))  # 25Q4环比=vs 25Q3(窗外), 不再是—
+        self.assertEqual(qt[1]["qoq"][0], 10.0)
+        # 跨年边界: 显示窗首季若是 Q1, 前一季取上年 Q4
+        singles2 = {("2025Q%d" % q): (100 * E8, 50 * E8, 40 * E8) for q in (1, 2, 3, 4)}
+        singles2.update({"2026Q1": (110 * E8, 55 * E8, 44 * E8)})
+        qt2, _ = judge.qoq_table(singles2, n=1)             # 只显示 26Q1
+        self.assertEqual(qt2[0]["qoq"], (10.0, 10.0, 10.0))  # vs 25Q4(窗外)
 
 
 class TestStage1Gate(unittest.TestCase):
@@ -203,6 +219,25 @@ class TestVerdict(unittest.TestCase):
         # 无季度数据的旧 pack 不崩, 仅跳过该节
         md2 = judge.render_report({"name": "t", "code": "1", "asof": "d"}, dict(v), [])
         self.assertNotIn("近4季财务三线", md2)
+
+    def test_render_report_pdf_summary(self):
+        """两厚报告精要+跨期对比进发布报告(2026-11-05 用户需求)。"""
+        v = {"stage": "回调击球区", "confidence": "高", "is_tenbagger_candidate": True,
+             "stage_reason": "r", "conclusion": "过", "lynch_class": "快速增长", "lynch_reason": "l",
+             "jingshui_core7": [{"no": 1, "item": "i", "verdict": "✓", "evidence": "e"}],
+             "jingshui_5no": [{"no": 1, "item": "n", "verdict": "否"}],
+             "canslim": {k: "✓" for k in ("C", "A", "N", "S", "L", "I", "M")},
+             "pdf_summary": {"2025年报": "行业高景气, 订单排至2030, 募投三项目启动",
+                             "2026半年报": "接单创纪录, VLAC新谱系, 产能瓶颈倒逼扩产提速",
+                             "跨期对比": "『产能瓶颈倒逼扩张』新出现, 接单表述由『批量斩获』升级为『刷新纪录』"}}
+        md = judge.render_report({"name": "t", "code": "1", "asof": "d"}, v, [])
+        self.assertIn("## 两厚报告精要(年报/半年报 PDF 总结)", md)
+        self.assertIn("- **2025年报**: 行业高景气", md)
+        self.assertIn("- **跨期对比**: 『产能瓶颈倒逼扩张』新出现", md)
+        # 未填 pdf_summary 的旧 verdict 不渲染该节
+        md2 = judge.render_report({"name": "t", "code": "1", "asof": "d"},
+                                  {k: vv for k, vv in v.items() if k != "pdf_summary"}, [])
+        self.assertNotIn("两厚报告精要", md2)
 
 
 if __name__ == "__main__":

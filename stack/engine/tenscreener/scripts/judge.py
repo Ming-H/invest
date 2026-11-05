@@ -272,23 +272,31 @@ def three_line_qs(code):
 
 
 def qoq_table(singles, n=4):
-    """近 n 季单季金额 + 同比 + 环比(环比含季节噪声, 只呈现供参考)。"""
+    """近 n 季单季金额 + 同比 + 环比(环比含季节噪声, 只呈现供参考)。
+    首个显示季的环比取显示窗外上一季(singles 常有 8+ 季历史, 2026-11-05 用户反馈修正:
+    此前 i==0 一律返回 None, 造成首季环比假缺失)。"""
     labels = sorted(singles)[-n:]
 
-    def qoq(lbl, i):
-        if lbl not in singles or i == 0:
-            return (None, None, None)
-        prev = labels[i - 1]
+    def prev_label(lbl):
+        if len(lbl) == 4:                       # 运行时格式 "26Q1"(qlabel 两位年)
+            yy, q = 2000 + int(lbl[:2]), int(lbl[3])
+            py, pq = (yy - 1, 4) if q == 1 else (yy, q - 1)
+            return "%02dQ%d" % (py % 100, pq)
+        y4, q = int(lbl[:4]), int(lbl[5])       # 兼容 "2026Q1" 四位年标签
+        py, pq = (y4 - 1, 4) if q == 1 else (y4, q - 1)
+        return "%dQ%d" % (py, pq)
+
+    def qoq(lbl):
+        p = prev_label(lbl)
         row = []
-        for v, b in zip(singles[lbl], singles.get(prev, (None, None, None))):
+        for v, b in zip(singles.get(lbl, (None,) * 3), singles.get(p, (None,) * 3)):
             row.append(round((v / b - 1) * 100, 1) if (v is not None and b is not None and b > 0) else None)
         return tuple(row)
 
     out = []
-    for i, lbl in enumerate(labels):
-        yoyr = None
+    for lbl in labels:
         out.append({"label": lbl, "single_yi": tuple(_yi(v) for v in singles.get(lbl, (None,) * 3)),
-                    "qoq": qoq(lbl, i)})
+                    "qoq": qoq(lbl)})
     return out, labels
 
 
@@ -990,10 +998,17 @@ def _render_pack_md(pack, texts):
                                 "narrative": "≤40字, 对比两期MD&A措辞变化(新出现/消失了什么)",
                                 "leads": "≤40字, 先行指标综合方向"},
               "tps_qualitative": {"F1行业空间": "≤60字", "F5催化": "", "F6生意模式": ""},
+              "pdf_summary": {"2025年报": "≤150字: 行业景气表述/经营要点增量/募投进展/主要风险/非经常",
+                              "2026半年报": "同上(精读第七节该报告章节原文后总结)",
+                              "跨期对比": "两厚报告对读≤150字: 景气措辞/经营要点/募投节奏/风险条目 的变化方向"},
               "risks": ["≤3条, 每条注明看什么指标跟踪"],
               "watch_next": ["≤3个可跟踪变量"],
               "conclusion": "过/不过/部分通过(差哪几条)"
-          }, ensure_ascii=False, indent=1), "```", ""]
+          }, ensure_ascii=False, indent=1), "```", "",
+          "**pdf_summary(2026-11-05 新增)**: 键=第七节两厚报告的 cn 标签 +『跨期对比』; "
+          "每份厚报告总结一段(行业景气措辞/经营要点较上期增量/募投投产节奏/风险章节提示/非经常); "
+          "『跨期对比』= 两厚**对读**找变化趋势: 什么表述新出现/消失了、景气定调升降、"
+          "募投与产能节奏快慢、风险条目增减——与第八节 C表述漂移/叙述漂移互相印证。", ""]
     return "\n".join(L)
 
 
@@ -1039,6 +1054,7 @@ def load_verdict(path):
         errs.append("lynch_class 非法 —— 标记未判定")
     for k in ("stage_reason", "lynch_reason", "conclusion"):
         v.setdefault(k, "")
+    v.setdefault("pdf_summary", {})          # 两厚报告精要(2026-11-05 新增, 缺省不阻塞)
     ts = v.get("trend_signals") or {}
     v["trend_signals"] = {k: ts.get(k) or "未判定" for k in ("guidance", "national_team", "narrative", "leads")}
     v.setdefault("tps_qualitative", {})
@@ -1117,6 +1133,12 @@ def render_report(pack, verdict, errs):
               "| 信号 | 方向 | 证据 |", "|---|---|---|"]
         for r in card["rows"]:
             L.append("| %s | %s | %s |" % (r.get("信号"), r.get("方向"), r.get("证据")))
+    ps = verdict.get("pdf_summary") or {}
+    if any(ps.values()):
+        L += ["", "## 两厚报告精要(年报/半年报 PDF 总结)"]
+        for k, s in ps.items():
+            if s:
+                L += ["", "- **%s**: %s" % (k, s)]
     if verdict.get("risks"):
         L += ["", "## 风险与跟踪"] + ["- %s" % r for r in verdict["risks"]]
     if verdict.get("watch_next"):
