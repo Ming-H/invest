@@ -896,12 +896,15 @@ def build_pack(code, outdir, with_pdf=True, pdf_dir=None):
     except Exception as e:
         degrade("v5_sector", str(e)[:60])
     disc = sector.discovery_dials(board, cons, hold, pos_1y=(m or {}).get("pos_1y"))
-    pev = policy_evidence(ind_name, ind_concepts)
-    ind_profile = _industry_profile_path(ind_name)
     try:
         orgrow = (_sec_rows("RPT_F10_BASIC_ORGINFO", code6, sort=None) or [{}])[0]
     except Exception:
         orgrow = {}
+    if not ind_name:                              # 板块接口受限 → ORGINFO EM2016 兜底
+        em = str(orgrow.get("EM2016") or "")
+        ind_name = em.split("-")[-1].strip() if em else None
+    pev = policy_evidence(ind_name, ind_concepts)
+    ind_profile = _industry_profile_path(ind_name)
     background = {"industry": ind_name,
                   "orginfo": {k: v for k, v in orgrow.items()
                               if v and isinstance(v, (str, int, float)) and len(str(v)) < 60}}
@@ -1008,14 +1011,18 @@ def policy_evidence(industry, concepts):
         return _cached_fetch(k, fetch)
 
     gov, news = [], []
-    c0 = (concepts or "").split(",")[0].strip() if concepts else None
+    c0 = (concepts or "").split(",")[0].strip() if concepts else ""
+    kw = c0 or industry or ""
+    if not kw:
+        degrade("policy_evidence", "行业关键词缺失(板块接口受限且无兜底)")
+        return {"gov": [], "news": []}
     try:
-        gov = _gov("title", c0 or industry, 5)
-        gov += _gov("content", "%s 十五五" % (c0 or industry), 4)
+        gov = _gov("title", kw, 5)
+        gov += _gov("content", "%s 十五五" % kw, 4)
     except Exception as e:
         degrade("policy_evidence.gov", str(e)[:50])
     try:
-        news = _wscn(c0 or industry, 8)
+        news = _wscn(kw, 8)
     except Exception as e:
         degrade("policy_evidence.news", str(e)[:50])
     return {"gov": gov[:9], "news": news[:8]}
