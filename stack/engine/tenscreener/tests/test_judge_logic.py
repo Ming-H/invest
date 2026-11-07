@@ -276,7 +276,7 @@ class TestVerdict(unittest.TestCase):
              "jingshui_5no": [{"no": 1, "item": "n", "verdict": "否"}],
              "canslim": {k: "✓" for k in ("C", "A", "N", "S", "L", "I", "M")}}
         md = judge.render_report(pack, v, [])
-        self.assertIn("近4季财务三线", md)
+        self.assertIn("## 三、财务三线(近4季单季, F10自算)", md)
         self.assertIn("| 2026Q3 | 150.0 | +38.0 | +7.1 | 90.0 | +136.7 | +28.6 | 60.0 | +49.9 | +7.1 |", md)
         self.assertIn("三线过线: 归母/扣非(2/3)", md)
         # 无季度数据的旧 pack 不崩, 仅跳过该节
@@ -293,15 +293,15 @@ class TestVerdict(unittest.TestCase):
              "pdf_summary": {"在手订单与收入可见度": "交船计划排至2030, VLCC手持全球单体第一(2026半年报)",
                              "跨期对比": "定调由『峰回路转』升级为『创历史同期纪录』"}}
         md = judge.render_report({"name": "t", "code": "1", "asof": "d"}, v, [])
-        self.assertIn("## 两厚报告精要(分门别类, 年报/半年报对读)", md)
+        self.assertIn("## 四、财报阅读(两厚报告精要, 分门别类对读)", md)
         self.assertIn("**在手订单与收入可见度**", md)
         self.assertIn("排至2030", md)
         # 精要节须在三线表之后、静水因子节之前
-        self.assertLess(md.index("两厚报告精要"), md.index("## 静水核心因子"))
+        self.assertLess(md.index("财报阅读"), md.index("### 静水核心因子"))
         # 未填 pdf_summary 的旧 verdict 不渲染该节
         md2 = judge.render_report({"name": "t", "code": "1", "asof": "d"},
                                   {k: vv for k, vv in v.items() if k != "pdf_summary"}, [])
-        self.assertNotIn("两厚报告精要", md2)
+        self.assertNotIn("财报阅读", md2)
 
     def test_render_report_core7_list_and_no_5no_table(self):
         """2026-11-08 用户定版: 核心因子7条用列表(同CAN SLIM式), 5不买不再渲染。"""

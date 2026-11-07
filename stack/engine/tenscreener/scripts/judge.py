@@ -1308,6 +1308,7 @@ def _render_pack_md(pack, texts):
                               "产能与扩产": "现有产能+扩产/募投项目与达产节奏",
                               "管理层讨论要点": "MD&A关键表态与叙事基调(对产业趋势的认同度)",
                               "经营与交付亮点": "交付节奏/技术突破/新品新客户",
+                              "股东与机构变化": "股份变动/限售解禁/十大股东与机构进出两期对读(CAN SLIM 的 I; 素材第四节API diff+第七节股东章节), 户数趋势",
                               "风险提示": "风险章节条目及两期增减变化",
                               "非经常与利润质量": "非经常构成与归母/扣非差异归因(剔一次性损益)",
                               "跨期对比": "两厚对读: 定调升降/新出现与消失的表述/节奏快慢"},
@@ -1315,8 +1316,8 @@ def _render_pack_md(pack, texts):
               "watch_next": ["≤3个可跟踪变量"],
               "conclusion": "过/不过/部分通过(差哪几条)"
           }, ensure_ascii=False, indent=1), "```", "",
-          "**pdf_summary(2026-11-08 分节版)**: 精读第七节两厚报告章节原文, 按八个固定小节分类总结——"
-          "行业景气/在手订单与收入可见度/产能与扩产/管理层讨论要点/经营与交付亮点/风险提示/"
+          "**pdf_summary(2026-11-08 分节版)**: 精读第七节两厚报告章节原文, 按九个固定小节分类总结——"
+          "行业景气/在手订单与收入可见度/产能与扩产/管理层讨论要点/经营与交付亮点/股东与机构变化/风险提示/"
           "非经常与利润质量/跨期对比。每节标注出处期(年报/半年报), 精简但全; 数字引报告原文;"
           "『跨期对比』与第八节 C表述漂移互相印证。", "",
           "**v5 五问纪律**: ①evidence_down 为空 → 校验警告(防追高合理化); "
@@ -1389,20 +1390,19 @@ def load_verdict(path):
 
 
 def render_report(pack, verdict, errs):
+    """v5.2 版式(2026-11-08 用户定版): 中文序号六章/删头部meta块/删记分卡表
+    (先行数据已在『财报阅读』小节)/pdf_summary 含『股东与机构变化』小节。"""
     p = pack
-    L = ["# %s(%s) 十倍股判定报告" % (p.get("name"), p.get("code")), "",
-         "> 判定日 %s · 素材: F10八季三线/资产负债表/股东/主营构成/两厚两薄报告章节/价格与大盘β" % p.get("asof"),
-         "> 方法论: 静水核心因子+5不买(主判) · CAN SLIM 七要素 · 林奇六分类 · 判定引擎 tenscreener judge",
-         "> 声明: 非投资建议, 仅供参考学习。", ""]
+    L = ["# %s(%s) 十倍股判定报告" % (p.get("name"), p.get("code")), ""]
     cand = "是" if verdict.get("is_tenbagger_candidate") else "否"
-    L += ["## 结论",
-          "",
+    L += ["## 一、结论", "",
           "- **是否十倍股候选: %s**(置信 %s)" % (cand, verdict.get("confidence")),
           "- **所处阶段: %s** —— %s" % (verdict.get("stage"), verdict.get("stage_reason")),
           "- **阶段预判(纯算法对照)**: %s" % (pack.get("stage_pre") or ("—",))[0],
           "- **清单结论: %s**" % verdict.get("conclusion", "—"),
           "- **林奇分类: %s** —— %s" % (verdict.get("lynch_class"), verdict.get("lynch_reason")), ""]
-    # ── v5 三层判定章(时代β→行业β→个股α→发现度, 2026-11-07) ──
+
+    # ── 二、三层判定(时代β→行业β→个股α→发现度) ──
     v5 = verdict.get("v5_three_layer") or {}
     if v5:
         eb = v5.get("era_beta") or {}
@@ -1412,53 +1412,57 @@ def render_report(pack, verdict, errs):
         cp = v5.get("capacity") or {}
         ri = v5.get("research_intel") or {}
         dc = v5.get("discovery") or {}
-        L += ["## 三层判定(v5: 时代β → 行业β → 个股α → 发现度)", "",
-              "**Q1 时代β**: %s —— fit=%s" % (eb.get("mainline") or "未判", eb.get("fit") or "未判"),
-              "- 政策侧(实时): %s" % ("; ".join(eb.get("policy_now") or []) or "无"),
-              "- 市场侧(实时): %s" % (eb.get("market_now") or "无"), "",
-              "**Q2 行业β(纯基本面)**: %s · %s" % (ib.get("sector") or "—", ib.get("cycle_type") or "未判"),
+        L += ["## 二、三层判定(时代β → 行业β → 个股α → 发现度)", ""]
+        L += ["### Q1 时代β", "",
+              "- 主线: **%s** · fit=%s" % (eb.get("mainline") or "未判", eb.get("fit") or "未判"),
+              "- 政策侧: %s" % ("; ".join(eb.get("policy_now") or []) or "无"),
+              "- 市场侧: %s" % (eb.get("market_now") or "无"), ""]
+        L += ["### Q2 行业β(纯基本面周期时钟)", "",
+              "- 行业: **%s** · %s" % (ib.get("sector") or "—", ib.get("cycle_type") or "未判"),
               "- 周期阶段: **%s**(距上轮顶 %s 年 · %s)" % (
                   ib.get("phase") or "未判",
                   ib.get("years_since_peak") if ib.get("years_since_peak") is not None else "?",
                   ib.get("lead_lag") or "无 lead_lag 注记"),
               "- 景气实证: %s" % (ib.get("fundamentals") or "无"),
               "- 上行证据: %s" % ("; ".join(ib.get("evidence_up") or []) or "无"),
-              "- **见顶/反方证据: %s**" % ("; ".join(ib.get("evidence_down") or []) or "⚠未提供"), "",
-              "**Q3 个股α**: 属性=%s" % (na.get("class") or "未判")]
+              "- **见顶/反方证据: %s**" % ("; ".join(ib.get("evidence_down") or []) or "⚠未提供"), ""]
+        L += ["### Q3 个股α", "", "- 属性: **%s**" % (na.get("class") or "未判")]
         if mt.get("event"):
             L.append("- 蜕变: %s → %s(%s) · 反方: %s" % (
                 mt.get("from"), mt.get("to"), mt.get("event"), mt.get("counter") or "未评估"))
         if na.get("price_driver") or na.get("volume_driver"):
-            L.append("- 量价分解: 价[%s] × 量[%s] · 台阶: %s" % (
-                na.get("price_driver") or "—", na.get("volume_driver") or "—", na.get("staircase") or "未判"))
+            L.append("- 量价分解: 价[%s] × 量[%s]" % (
+                na.get("price_driver") or "—", na.get("volume_driver") or "—"))
+        if na.get("staircase"):
+            L.append("- 台阶判别: %s" % na.get("staircase"))
         if cp.get("now") or cp.get("planned"):
             L.append("- 产能: %s → %s(倍数 %s · %s)" % (
                 cp.get("now") or "—", cp.get("planned") or "—",
                 cp.get("multiple") if cp.get("multiple") is not None else "?",
                 cp.get("source") or "无出处"))
         if ri.get("summary"):
-            L.append("- 研报情报: %s · EPS修正=%s · 覆盖趋势=%s" % (
+            L.append("- 研报情报: %s · EPS修正=%s · 覆盖=%s" % (
                 ri.get("summary"), ri.get("eps_revisions") or "—", ri.get("coverage_trend") or "—"))
-        L += ["", "**Q4 发现度**: %s —— %s" % (dc.get("phase") or "未判", dc.get("combo") or ""),
+        L += ["", "### Q4 发现度", "",
+              "- 相位: **%s** —— %s" % (dc.get("phase") or "未判", dc.get("combo") or ""),
               "- 表盘: %s" % (dc.get("dials") or "无"), ""]
-        # 确定性风险检测器(代码算, 不靠自觉)
         if na.get("class") in ("纯周期", "周期成长") and ib.get("phase") in ("兑现段", "顶部区"):
             pe = (pack.get("quote") or {}).get("pe")
             L.append("> ⚠️ **周期顶 PE 幻觉警示**: 标的为%s属性且行业处「%s」——当前 PE(%s)是利润顶的"
-                     "倒影而非便宜。周期顶=利润最漂亮=PE最低=最像\"便宜成长股\"的时刻, "
-                     "持有纪律参照 track E1/E3, 不因低PE加仓。" % (na.get("class"), ib.get("phase"), pe or "—"))
+                     "倒影而非便宜。周期顶=利润最漂亮=PE最低=最像\"便宜成长股\"的时刻, 不因低PE加仓。"
+                     % (na.get("class"), ib.get("phase"), pe or "—"))
+            L.append("")
         if dc.get("phase") == "拥挤":
-            L.append("> ⚠️ **发现度拥挤警示**: 研报覆盖趋于饱和+资金热度高位的组合=潜在新增买家枯竭"
-                     "(静水\"人多的地方不要去\")。对照第五节覆盖机构数与股东户数趋势核验。")
-        if v5.get("falsifiers"):
-            L += ["", "**证伪条件**: "] + ["- %s" % f for f in v5["falsifiers"]]
-        L.append("")
+            L.append("> ⚠️ **发现度拥挤警示**: 覆盖趋于饱和+资金热度高位=潜在新增买家枯竭。")
+            L.append("")
     else:
-        L += ["## 三层判定(v5)", "", "> ⚠ 本判定未包含 v5_three_layer(五问未走), 仅有个股层结论。", ""]
+        L += ["## 二、三层判定(v5)", "", "> ⚠ 本判定未包含 v5_three_layer, 仅有个股层结论。", ""]
+
+    # ── 三、财务三线 ──
     qt = p.get("quarterly_table") or []
     qs = p.get("qs") or {}
     if qt:
-        L += ["", "## 近4季财务三线(单季, F10自算)", "",
+        L += ["## 三、财务三线(近4季单季, F10自算)", "",
               "| 季 | 营收(亿) | 同比% | 环比% | 归母(亿) | 同比% | 环比% | 扣非(亿) | 同比% | 环比% |",
               "|---|---|---|---|---|---|---|---|---|---|"]
 
@@ -1466,7 +1470,7 @@ def render_report(pack, verdict, errs):
             return ("%.1f" % v) if isinstance(v, (int, float)) else "—"
 
         def _y(v):
-            return _fmt_yoy(v).replace("%", "")   # None → 扭亏/NA
+            return _fmt_yoy(v).replace("%", "")
 
         def _q(v):
             return ("%+.1f" % v) if isinstance(v, (int, float)) else "—"
@@ -1482,46 +1486,50 @@ def render_report(pack, verdict, errs):
             L += ["", "- 三线过线: %s(%d/3) · 最长连续 %d 季 · 形态 %s · 加速 %s · 扣非背离: %s" % (
                 "/".join(ana["pass_lines"]["labels"]) or "无", ana["pass_lines"]["count"],
                 ana["streak_max"], ana["resonance"], ana["rev_accel"], ana["divergence"]["flag"])]
-    # 两厚报告精要移到三线表下(2026-11-08 用户定版: 财报阅读紧贴财务数据)
+
+    # ── 四、财报阅读(两厚精要·分门别类, 含股东与机构变化) ──
     ps = verdict.get("pdf_summary") or {}
     if any(ps.values()):
-        L += ["", "## 两厚报告精要(分门别类, 年报/半年报对读)", ""]
+        L += ["", "## 四、财报阅读(两厚报告精要, 分门别类对读)", ""]
         for k, sv in ps.items():
             if sv:
                 L += ["**%s**" % k, "", sv, ""]
-    L += ["## 静水核心因子 7 条", ""]
+
+    # ── 五、方法论判定 ──
+    L += ["## 五、方法论判定", "", "### 静水核心因子 7 条", ""]
     for it in verdict.get("jingshui_core7", []):
         L.append("- **%s %s**: %s —— %s" % (it.get("no"), it.get("item"),
                                              it.get("verdict"), it.get("evidence", "")))
-    L += ["", "## CAN SLIM 七要素", ""]
+    L += ["", "### CAN SLIM 七要素", ""]
     for k in CS_KEYS:
-        L.append("- **%s** %s" % (k, verdict["canslim"].get(k)))
-    tq = verdict.get("tps_qualitative") or {}
-    if tq:
-        L += ["", "## TPS 定性因子(Claude 判)", ""]
-        for k, vv in tq.items():
-            if vv:
-                L.append("- **%s**: %s" % (k, vv))
+        L.append("- **%s** %s" % (k, (verdict.get("canslim") or {}).get(k)))
+    lc = verdict.get("lynch_class")
+    if lc:
+        L += ["", "### 林奇分类", "", "- **%s** —— %s" % (lc, verdict.get("lynch_reason"))]
     tsig = verdict.get("trend_signals") or {}
     if tsig:
-        L += ["", "## 跨期趋势判定",
-              "",
+        L += ["", "### 跨期趋势判定", "",
               "- **指引漂移**: %s" % tsig.get("guidance"),
               "- **国家队/股东身份**: %s" % tsig.get("national_team"),
               "- **叙述漂移(两期MD&A对比)**: %s" % tsig.get("narrative"),
               "- **先行指标方向**: %s" % tsig.get("leads")]
-    card = ((pack.get("trend") or {}).get("scorecard") or {})
-    if card.get("rows"):
-        L += ["", "**确定性记分卡: %s (记分 %d)**" % (card.get("verdict"), card.get("score")), "",
-              "| 信号 | 方向 | 证据 |", "|---|---|---|"]
-        for r in card["rows"]:
-            L.append("| %s | %s | %s |" % (r.get("信号"), r.get("方向"), r.get("证据")))
+    tq = verdict.get("tps_qualitative") or {}
+    if tq:
+        L += ["", "### TPS 定性因子", ""]
+        for k, vv in tq.items():
+            if vv:
+                L.append("- **%s**: %s" % (k, vv))
+
+    # ── 六、风险与跟踪 ──
+    L += ["", "## 六、风险与跟踪", ""]
+    if v5.get("falsifiers"):
+        L += ["**证伪条件**", ""] + ["- %s" % f for f in v5["falsifiers"]] + [""]
     if verdict.get("risks"):
-        L += ["", "## 风险与跟踪"] + ["- %s" % r for r in verdict["risks"]]
+        L += ["**风险**", ""] + ["- %s" % r for r in verdict["risks"]] + [""]
     if verdict.get("watch_next"):
-        L += ["", "## 下一步盯什么"] + ["- %s" % w for w in verdict["watch_next"]]
+        L += ["**下一步盯什么**", ""] + ["- %s" % w for w in verdict["watch_next"]] + [""]
     if errs:
-        L += ["", "> ⚠ verdict 校验: " + "; ".join(errs)]
+        L += ["> ⚠ verdict 校验: " + "; ".join(errs)]
     L += ["", "---", "*非投资建议 · tenscreener judge · %s*" % p.get("asof")]
     return "\n".join(L)
 
