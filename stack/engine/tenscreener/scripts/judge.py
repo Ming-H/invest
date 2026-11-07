@@ -26,7 +26,7 @@ import urllib.parse
 import urllib.request
 from datetime import date, datetime
 
-from emoney import (f10_periods, predicts, forecast_signal)
+from emoney import (f10_periods, predicts, forecast_signal, three_line_qs)
 from quarters import latest_report_period, last_n_quarters, q_label, q_cn, analyze_quarterly
 import kline
 import trend
@@ -209,7 +209,19 @@ def _http_json(url, referer="https://data.eastmoney.com", timeout=15):
 
 def _sec_rows(report, code, sort="REPORT_DATE", extra_filter=None):
     """datacenter(securities) host 通用取数(FREEHOLDERS/HOLDERNUM/GBALANCE 实测可用)。
-    坑: RPT_F10_BASIC_ORGINFO 不能带 sortColumns(返回空, earnings-reader 实测同款坑) → sort=None 时省略。"""
+    坑: RPT_F10_BASIC_ORGINFO 不能带 sortColumns(返回空, earnings-reader 实测同款坑) → sort=None 时省略。
+    当日落盘缓存(2026-11-07): 同一 report+code 二次调用零请求——修 build_pack 里
+    FREEHOLDERS 被 holders_shift 与 trend.holders_timeline 各取一次的重复。"""
+    from emoney import EM_CACHE_ROOT
+    code6 = str(code).split(".")[0]
+    cache_dir = os.path.join(EM_CACHE_ROOT, date.today().strftime("%Y%m%d"))
+    cf = os.path.join(cache_dir, "sec_%s_%s_%s.json" % (
+        report, code6, "f" if extra_filter else (sort or "nos")))
+    if os.path.exists(cf):
+        try:
+            return json.load(open(cf, encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
     p = {"reportName": report, "columns": "ALL", "pageSize": 40, "pageNumber": 1,
          "filter": '(SECUCODE="%s")' % _secu(code)}
     if sort:
@@ -221,7 +233,13 @@ def _sec_rows(report, code, sort="REPORT_DATE", extra_filter=None):
     try:
         d = _http_json(u)
         time.sleep(0.12)
-        return (d.get("result") or {}).get("data") or []
+        rows = (d.get("result") or {}).get("data") or []
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            json.dump(rows, open(cf, "w", encoding="utf-8"), ensure_ascii=False)
+        except OSError:
+            pass
+        return rows
     except Exception as e:
         degrade("_sec_rows", "%s %s" % (report, str(e)[:60]))
         return []
@@ -254,21 +272,7 @@ def four_reports(code):
 
 
 # ============ ② 三线序列(F10免费链) → quarters 分析结构 ============
-
-def three_line_qs(code):
-    """F10 累计 → 单季同比 → quarters.analyze_quarterly 的 qs 结构。"""
-    sys.path.insert(0, HERE)
-    from emoney import cum_singles, yoy_from_periods
-    periods = f10_periods(code)
-    yoy = yoy_from_periods(periods)
-    singles = cum_singles(periods)
-    qs = {"rev_yoy": {}, "parent_yoy": {}, "deduct_yoy": {}, "periods": sorted(yoy), "latest_period": None}
-    for lbl, (r, p, d) in yoy.items():
-        qs["rev_yoy"][lbl] = r
-        qs["parent_yoy"][lbl] = p
-        qs["deduct_yoy"][lbl] = d
-    qs["latest_period"] = qs["periods"][-1] if qs["periods"] else None
-    return qs, singles, periods
+# three_line_qs 已移入 emoney.py(2026-11-07: watch/track 免问财化共用入口)
 
 
 def qoq_table(singles, n=4):
@@ -494,9 +498,10 @@ def cashflow_leads(code, n=4):
     return out
 
 
-def holders_shift(code):
-    """十大流通股东最新两期 diff(新进/退出/增减) + 股东户数近5期趋势。"""
-    fh = _sec_rows("RPT_F10_EH_FREEHOLDERS", code)[:12]
+def holders_shift(code, freeholder_rows=None):
+    """十大流通股东最新两期 diff(新进/退出/增减) + 股东户数近5期趋势。
+    freeholder_rows 可注入(build_pack 已取过则复用, 防同一接口重复请求)。"""
+    fh = (freeholder_rows or _sec_rows("RPT_F10_EH_FREEHOLDERS", code))[:12]
     by_end = {}
     for r in fh:
         by_end.setdefault((r.get("END_DATE") or "")[:10], []).append(r)
@@ -594,15 +599,9 @@ def price_metrics(code):
 
 
 def market_gate_free():
-    """大盘β(免费版): 上证日K close vs MA250。on/off/unknown。
-    (monitor.market_gate 走问财花额度; judge 全免费原则下用K线自算, 口径一致=年线β)"""
-    rows = kline.fetch_qfq("sh000001", "%d-01-01" % (date.today().year - 2), date.today().isoformat())
-    closes = [float(r[2]) for r in rows]
-    if len(closes) < 250:
-        return {"verdict": "unknown", "method": "no_data"}
-    ma = sum(closes[-250:]) / 250.0
-    v = "on" if closes[-1] >= ma else "off"
-    return {"verdict": v, "method": "ma250(免费K线)", "close": closes[-1], "ma250": round(ma, 1)}
+    """大盘β(免费版, 2026-11-07 移入 monitor.py 供 watch/track 共用)。"""
+    from monitor import market_gate_free as _mgf
+    return _mgf()
 
 
 # ============ ⑤ 报告正文(两厚两薄 PDF → 章节) ============
@@ -814,7 +813,8 @@ def build_pack(code, outdir, with_pdf=True, pdf_dir=None):
     qt, qlabels = qoq_table(singles)
     qual = quality_rows(code6)
     bal = balance_leads(code6)
-    hold = holders_shift(code6)
+    fh_rows = _sec_rows("RPT_F10_EH_FREEHOLDERS", code6)[:30]   # 取一次, 两处共用
+    hold = holders_shift(code6, freeholder_rows=fh_rows)
     comp = main_composition(code6, thick_labels)
     m, recent_closes = price_metrics(code6)
     gate = market_gate_free()
@@ -842,7 +842,6 @@ def build_pack(code, outdir, with_pdf=True, pdf_dir=None):
     guidance = trend.extract_guidance(texts, jyps_list)
     gv = trend.guidance_verdict(guidance, "收入") or {}
     gv2 = trend.guidance_verdict(guidance, "净利") or {}
-    fh_rows = _sec_rows("RPT_F10_EH_FREEHOLDERS", code6)[:30]
     holders_tl = trend.holders_timeline(fh_rows)
     kw = trend.keyword_matrix(texts, jyps_list)
     leads = trend.leads_verdict(bal, inc, cf, qs.get("periods") or [])

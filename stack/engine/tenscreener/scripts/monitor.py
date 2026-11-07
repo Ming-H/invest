@@ -18,6 +18,22 @@ watch(右侧确认)与 track(持有期退出)的判定核心。四块:
 from wencai import iwencai, _pick, _num, DEFAULT_ZHISHU_CLI, DEFAULT_FINANCE_CLI
 from quarters import (pass_lines, pass_streak, downshift, divergence,
                       _label_sortkey as l_sortkey, PASS_LINE)
+import kline
+
+_asof = None
+
+
+def set_asof(d=None):
+    """冻结'今天'(回放测试用, 生产不设)。影响免费路径(price_position_free/
+    market_gate_free)的K线窗口端点 → kline 缓存文件名随之确定, fixtures 可静态生成。
+    经 cli.py 的 TENSCREENER_ASOF 环境变量注入。"""
+    global _asof
+    _asof = d
+
+
+def _today():
+    from datetime import date as _d
+    return _d.fromisoformat(_asof) if _asof else _d.today()
 
 
 # ─── 大盘 β ─────────────────────────────────────────────────
@@ -38,6 +54,20 @@ def fetch_index_snapshot(cli_path=DEFAULT_ZHISHU_CLI):
         "ma250": _pick(x, "ma250", "250日均线", "年线"),
         "index_gain_1y": _pick(x, "近一年涨跌幅") or gains.get("gain_1yr"),
     }
+
+
+def market_gate_free():
+    """大盘β(免费版): 上证日K close vs MA250。on/off/unknown。
+    (fetch_index_snapshot+market_gate 走问财花额度; 2026-11-07 移入 monitor 供
+    watch/track/judge 共用 —— 全免费原则, 口径一致=年线β)"""
+    t = _today()
+    rows = kline.fetch_qfq("sh000001", "%d-01-01" % (t.year - 2), t.isoformat())
+    closes = [float(r[2]) for r in rows]
+    if len(closes) < 250:
+        return {"verdict": "unknown", "method": "no_data"}
+    ma = sum(closes[-250:]) / 250.0
+    v = "on" if closes[-1] >= ma else "off"
+    return {"verdict": v, "method": "ma250(免费K线)", "close": closes[-1], "ma250": round(ma, 1)}
 
 
 def market_gate(snapshot=None, cli_path=DEFAULT_ZHISHU_CLI):
@@ -89,6 +119,36 @@ def price_position(names, cli_path=DEFAULT_FINANCE_CLI, batch=6):
                 "pos_1y": (last / high) if (last and high and high > 0) else None,
             }
     return result
+
+
+def to_tencent_symbol(code):
+    """'600519' → 'sh600519'(腾讯K线符号)。北交所走新浪(kline._fetch_chunk 内分流)。"""
+    c = str(code).split(".")[0]
+    return ("sh" if c.startswith(("6", "9")) else
+            "bj" if c.startswith(("4", "8")) else "sz") + c
+
+
+def price_position_free(codes):
+    """免问财版价格位置: 腾讯前复权K线自算(2026-11-07)。
+    按股票代码键控(watch/track 项天然带 code, 也避开简称变更/重名的键断链)。
+    → {code: {last, high_1y, low_1y, pos_1y, drawdown}}"""
+    t = _today()
+    out = {}
+    for code in codes:
+        c6 = str(code).split(".")[0]
+        try:
+            rows = kline.fetch_qfq(to_tencent_symbol(c6),
+                                   "%d-01-01" % (t.year - 2), t.isoformat())
+        except Exception:
+            rows = []
+        m = kline.series_metrics(rows) if rows else {}
+        if m:
+            out[c6] = {"last": m.get("last"), "high_1y": m.get("high_52w"),
+                       "low_1y": m.get("low_52w"), "pos_1y": m.get("pos_1y"),
+                       "drawdown": m.get("drawdown")}
+        else:
+            out[c6] = {}
+    return out
 
 
 # ─── 确认(scouted → confirmed) ──────────────────────────────

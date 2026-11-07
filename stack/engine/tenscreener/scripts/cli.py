@@ -33,8 +33,11 @@ from wencai import DEFAULT_FINANCE_CLI, DEFAULT_ZHISHU_CLI
 from l1_screener import run as l1_run
 from l2_analyzer import analyze as l2_analyze
 from l3_evaluator import evaluate as l3_eval, render_report
-from quarters import fetch_quarterly_yoy, disclosure_window, latest_report_period, q_label
-from monitor import market_gate, fetch_index_snapshot, price_position, confirm_check, exit_check
+from quarters import disclosure_window, latest_report_period, q_label
+from monitor import (market_gate, fetch_index_snapshot, market_gate_free,
+                     price_position_free, confirm_check, exit_check)
+import monitor
+import emoney
 import runner as runner_mod
 import watchlist as wl
 
@@ -316,19 +319,25 @@ def cmd_watch(args):
 
 
 def _watch_run(args, w, wlpath):
-    scouted = [it for it in w["items"] if it["state"] == "scouted" and it.get("name")]
+    """2026-11-07 起免问财化: 三线走东财F10(emoney.three_line_qs)、价格走腾讯K线
+    (price_position_free)、大盘走K线MA250(market_gate_free)——问财用量 0,
+    财报季额度全部留给 L1/runner/L2。键控由股票简称改为股票代码。"""
+    scouted = [it for it in w["items"] if it["state"] == "scouted" and it.get("code")]
     gate = None
     qs_map, pos_map = {}, {}
     if scouted:
-        names = [it["name"] for it in scouted]
-        qs_map = fetch_quarterly_yoy(names, cli_path=args.cli_path)
-        pos_map = price_position(names, cli_path=args.cli_path)
+        for it in scouted:
+            try:
+                qs_map[it["code"]], _, _ = emoney.three_line_qs(it["code"])
+            except Exception:
+                qs_map[it["code"]] = None
+        pos_map = price_position_free([it["code"] for it in scouted])
         if not args.no_market_gate:
-            gate = market_gate(fetch_index_snapshot(cli_path=args.zhishu_cli))
+            gate = market_gate_free()
     lines, rows = _render_watch_header(gate), []
     for it in scouted:
-        qs = qs_map.get(it["name"])
-        pos = pos_map.get(it["name"], {})
+        qs = qs_map.get(it["code"])
+        pos = pos_map.get(it["code"], {})
         chk = confirm_check(it, qs, pos, gate, confirm_pos=args.confirm_pos,
                             market_gate_on=not args.no_market_gate)
         it["last_checked"] = date.today().isoformat()
@@ -413,7 +422,7 @@ def cmd_track(args):
         wl.transition(w, args.code, "holding",
                       note=f"人工建仓 cost={args.cost}" + (f" date={args.date}" if args.date else ""))
         it = wl.find(w, args.code)
-        pp = price_position([it["name"]], cli_path=args.cli_path).get(it["name"], {})
+        pp = price_position_free([args.code]).get(str(args.code).split(".")[0], {})
         peak = max([args.cost] + ([pp["high_1y"]] if pp.get("high_1y") else []))
         it["track"] = {"cost": args.cost,
                        "promoted_at": args.date or date.today().isoformat(),
@@ -445,13 +454,18 @@ def cmd_track(args):
     if not targets:
         print("无 holding/exit_signal 标的(先 track promote)。")
         return
-    names = [it["name"] for it in targets if it.get("name")]
-    qs_map = fetch_quarterly_yoy(names, cli_path=args.cli_path)
-    pos_map = price_position(names, cli_path=args.cli_path)
+    # 2026-11-07 免问财化: 三线F10+价格腾讯K线+大盘MA250(同 watch), 键控=股票代码
+    qs_map, pos_map = {}, {}
+    for it in targets:
+        try:
+            qs_map[it["code"]], _, _ = emoney.three_line_qs(it["code"])
+        except Exception:
+            qs_map[it["code"]] = None
+    pos_map = price_position_free([it["code"] for it in targets])
     rows = []
     for it in targets:
-        qs = qs_map.get(it.get("name"), {})
-        pos = pos_map.get(it.get("name"), {})
+        qs = qs_map.get(it.get("code"), {})
+        pos = pos_map.get(it.get("code"), {})
         tr = it.setdefault("track", {})
         # peak 维护:历史峰值/现价/近一年最高 三者取大
         # (近一年最高覆盖"上次 track 至今之间创出的高点",漏跑也不丢峰值)
@@ -652,15 +666,21 @@ def main():
         if v not in (None, False):
             setattr(args, k, v)
 
-    # 全局缓存/离线配置(问财与K线同步;K线 fixtures 约定放 <cache-dir>/kline/)
+    # 全局缓存/离线配置(问财/东财F10/K线 三源同步; fixtures 约定
+    # <cache-dir>/{问财json, kline/, emoney/}; 2026-11-07 watch/track 免问财化补 emoney)
     if args.cache_dir:
         wencai.set_cache_dir(args.cache_dir)
         kline.set_cache_dir(os.path.join(args.cache_dir, "kline"))
+        emoney.set_cache_dir(os.path.join(args.cache_dir, "emoney"))
     if args.offline:
         if not args.cache_dir:
             p.error("--offline 需配合 --cache-dir 指向 fixtures 目录")
         wencai.set_offline(True)
         kline.set_offline(True)
+        emoney.set_offline(True)
+    asof = os.environ.get("TENSCREENER_ASOF")          # 回放冻结'今天'(免费路径K线端点)
+    if asof:
+        monitor.set_asof(asof)
     if args.no_cache:
         # 强制重取:用带随机后缀的新缓存目录,不误删共享当日缓存
         import uuid

@@ -22,11 +22,13 @@ SCRIPTS = os.path.join(HERE, "..", "scripts")
 CLI = os.path.join(SCRIPTS, "cli.py")
 
 
-def run_cli(*argv, out_root=None):
+def run_cli(*argv, out_root=None, asof=None):
     import tempfile
     env = dict(os.environ)
     if out_root:
         env["TENSCREENER_OUT_ROOT"] = out_root
+    if asof:
+        env["TENSCREENER_ASOF"] = asof      # 冻结'今天': 免费路径K线端点/fixture 命名
     p = subprocess.run([sys.executable, CLI, *argv],
                        capture_output=True, text=True, timeout=120, env=env)
     return p.returncode, p.stdout, p.stderr
@@ -67,7 +69,8 @@ class TestReplay(unittest.TestCase):
         self.assertEqual(rc, 0, err)
         rc, out, err = run_cli("watch", "--run", "--offline",
                                "--cache-dir", cache("2024-11-15"),
-                               "--watchlist", wlpath, out_root=self.out)
+                               "--watchlist", wlpath, out_root=self.out,
+                               asof="2024-11-15")
         self.assertEqual(rc, 0, err)
         self.assertIn("**confirmed**", out)
         self.assertIn("连续验证", out)                         # streak≥2 注记
@@ -85,7 +88,8 @@ class TestReplay(unittest.TestCase):
         run_cli("watch", "add", "003010", "若羽臣", "--watchlist", wlpath)
         rc, out, err = run_cli("watch", "--run", "--offline",
                                "--cache-dir", cache("2025-04-30"),
-                               "--watchlist", wlpath, out_root=self.out)
+                               "--watchlist", wlpath, out_root=self.out,
+                               asof="2025-04-30")
         self.assertEqual(rc, 0, err)
         self.assertIn("**confirmed**", out)
         with open(wlpath, encoding="utf-8") as f:
@@ -99,16 +103,17 @@ class TestReplay(unittest.TestCase):
         wlpath = os.path.join(tmp, "watchlist.json")
         run_cli("watch", "add", "003010", "若羽臣", "--watchlist", wlpath)
         run_cli("watch", "--run", "--offline", "--cache-dir", cache("2024-11-15"),
-                "--watchlist", wlpath)                        # → confirmed
+                "--watchlist", wlpath, asof="2024-11-15")     # → confirmed
         # promote 需要 price_position 查询(用 T2 fixture 目录)
         rc, out, err = run_cli("track", "promote", "003010", "--cost", "25.6",
                                "--date", "2025-05-06", "--offline",
                                "--cache-dir", cache("2024-11-15"),
-                               "--watchlist", wlpath)
+                               "--watchlist", wlpath, asof="2024-11-15")
         self.assertEqual(rc, 0, err)
         rc, out, err = run_cli("track", "--run", "--offline",
                                "--cache-dir", cache("2026-04-30"),
-                               "--watchlist", wlpath, out_root=self.out)
+                               "--watchlist", wlpath, out_root=self.out,
+                               asof="2026-04-30")
         self.assertEqual(rc, 0, err)
         self.assertIn("**warn**", out)
         self.assertIn("中期调整", out)

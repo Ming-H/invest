@@ -175,7 +175,9 @@ def scan(min_gain_1y=60, pass_line=40.0, max_mv=2000, top_kline=30, top=15,
         return [], {"step1_count": 0, "source": source}
     res_map, ind_count = industry_resonance(rows)
 
-    # Step2: 动量TopN 拉K线(免额度);东财模式按 K线 g1y 过滤动量后按动量重排
+    # Step2: 动量TopN 拉K线(免额度);K线自算 g1y 做动量闸——问财"近一年涨跌幅大于X%"
+    # 条件值不随条件返回(实测), 故 2026-11-07 起两种模式统一用 K 线兜底验证;
+    # 东财模式另按 g1y 重排(其粗筛无价格条件)。
     # (截断放大且下限240:2026中报季增速分布极端,+242%只排223/372,小截断会丢主线票)
     cap = max(top_kline * 4, 240) if use_em else top_kline
     picked = sorted(rows, key=lambda r: r.get("profit_growth") or 0,
@@ -185,12 +187,11 @@ def scan(min_gain_1y=60, pass_line=40.0, max_mv=2000, top_kline=30, top=15,
         try:
             kl = kline.fetch_qfq(to_symbol(r["code"]), beg, date.today().isoformat())
             m = kline.series_metrics(kl)
-            if use_em:                       # 东财模式:K线自算近1年涨幅做动量闸
-                if len(kl) > 250:
-                    g1y = (float(kl[-1][2]) / float(kl[-250][2]) - 1) * 100
-                    r["g1y"] = round(g1y, 1)
-                    if g1y < min_gain_1y:
-                        continue
+            if len(kl) > 250:                       # K线自算近1年涨幅做动量闸(统一兜底)
+                g1y = (float(kl[-1][2]) / float(kl[-250][2]) - 1) * 100
+                r["g1y"] = round(g1y, 1)
+                if g1y < min_gain_1y:
+                    continue
             r["m"] = m
             survivors.append(r)
         except Exception as e:

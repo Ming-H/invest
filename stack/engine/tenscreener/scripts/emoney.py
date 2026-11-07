@@ -138,6 +138,22 @@ def yoy_from_periods(periods):
     return table
 
 
+def three_line_qs(code):
+    """F10 累计 → 单季同比 → quarters.analyze_quarterly 的 qs 结构。
+    -> (qs, singles, periods)。全免费源, watch/track/judge/runner(东财) 共用入口
+    (2026-11-07 从 judge.py 移入: 生命周期监测免问财化)。"""
+    periods = f10_periods(code)
+    yoy = yoy_from_periods(periods)
+    singles = cum_singles(periods)
+    qs = {"rev_yoy": {}, "parent_yoy": {}, "deduct_yoy": {}, "periods": sorted(yoy), "latest_period": None}
+    for lbl, (r, p, d) in yoy.items():
+        qs["rev_yoy"][lbl] = r
+        qs["parent_yoy"][lbl] = p
+        qs["deduct_yoy"][lbl] = d
+    qs["latest_period"] = qs["periods"][-1] if qs["periods"] else None
+    return qs, singles, periods
+
+
 # ─── 业绩预告 ───────────────────────────────────────────────
 
 def predicts(code):
