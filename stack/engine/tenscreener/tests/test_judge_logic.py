@@ -284,23 +284,36 @@ class TestVerdict(unittest.TestCase):
         self.assertNotIn("近4季财务三线", md2)
 
     def test_render_report_pdf_summary(self):
-        """两厚报告精要+跨期对比进发布报告(2026-11-05 用户需求)。"""
+        """两厚报告精要分节版(2026-11-08): 移至三线表后, 八小节逐节渲染。"""
         v = {"stage": "回调击球区", "confidence": "高", "is_tenbagger_candidate": True,
              "stage_reason": "r", "conclusion": "过", "lynch_class": "快速增长", "lynch_reason": "l",
              "jingshui_core7": [{"no": 1, "item": "i", "verdict": "✓", "evidence": "e"}],
              "jingshui_5no": [{"no": 1, "item": "n", "verdict": "否"}],
              "canslim": {k: "✓" for k in ("C", "A", "N", "S", "L", "I", "M")},
-             "pdf_summary": {"2025年报": "行业高景气, 订单排至2030, 募投三项目启动",
-                             "2026半年报": "接单创纪录, VLAC新谱系, 产能瓶颈倒逼扩产提速",
-                             "跨期对比": "『产能瓶颈倒逼扩张』新出现, 接单表述由『批量斩获』升级为『刷新纪录』"}}
+             "pdf_summary": {"在手订单与收入可见度": "交船计划排至2030, VLCC手持全球单体第一(2026半年报)",
+                             "跨期对比": "定调由『峰回路转』升级为『创历史同期纪录』"}}
         md = judge.render_report({"name": "t", "code": "1", "asof": "d"}, v, [])
-        self.assertIn("## 两厚报告精要(年报/半年报 PDF 总结)", md)
-        self.assertIn("- **2025年报**: 行业高景气", md)
-        self.assertIn("- **跨期对比**: 『产能瓶颈倒逼扩张』新出现", md)
+        self.assertIn("## 两厚报告精要(分门别类, 年报/半年报对读)", md)
+        self.assertIn("**在手订单与收入可见度**", md)
+        self.assertIn("排至2030", md)
+        # 精要节须在三线表之后、静水因子节之前
+        self.assertLess(md.index("两厚报告精要"), md.index("## 静水核心因子"))
         # 未填 pdf_summary 的旧 verdict 不渲染该节
         md2 = judge.render_report({"name": "t", "code": "1", "asof": "d"},
                                   {k: vv for k, vv in v.items() if k != "pdf_summary"}, [])
         self.assertNotIn("两厚报告精要", md2)
+
+    def test_render_report_core7_list_and_no_5no_table(self):
+        """2026-11-08 用户定版: 核心因子7条用列表(同CAN SLIM式), 5不买不再渲染。"""
+        v = {"stage": "主升期", "confidence": "高", "is_tenbagger_candidate": True,
+             "stage_reason": "r", "conclusion": "过", "lynch_class": "快速增长", "lynch_reason": "l",
+             "jingshui_core7": [{"no": 1, "item": "营收利润增速≥40%", "verdict": "✓", "evidence": "三线+181%"}],
+             "jingshui_5no": [{"no": 3, "item": "未创一年新高?", "verdict": "✓(触发)", "evidence": ""}],
+             "canslim": {k: "✓" for k in ("C", "A", "N", "S", "L", "I", "M")}}
+        md = judge.render_report({"name": "t", "code": "1", "asof": "d"}, v, [])
+        self.assertIn("- **1 营收利润增速≥40%**: ✓ —— 三线+181%", md)
+        self.assertNotIn("静水 5 不买", md)          # 表格已删
+        self.assertNotIn("亏损公司?", md)             # 条目不再出现在渲染
 
 
 if __name__ == "__main__":
