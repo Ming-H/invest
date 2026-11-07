@@ -961,12 +961,14 @@ def _industry_profile_path(ind_name):
             head = open(path, encoding="utf-8").read(500)
         except OSError:
             continue
-        hit = ind_name in head
-        if not hit and "别名" in head:
-            alias_line = next((l for l in head.splitlines() if "别名" in l), "")
-            hit = ind_name in alias_line
-        if hit:
+        if ind_name in head:
             return path
+        if "别名" in head:                     # 别名行任一片段与板块名互为子串(Ⅱ后缀等)
+            alias_line = next((l for l in head.splitlines() if "别名" in l), "")
+            for seg in alias_line.replace("别名:", "").replace("别名：", "").split("/"):
+                seg = seg.strip()
+                if seg and (seg in ind_name or ind_name.split("Ⅰ")[0].split("Ⅱ")[0] in seg):
+                    return path
     return None
 
 
