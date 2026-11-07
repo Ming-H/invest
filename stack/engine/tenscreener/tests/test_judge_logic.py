@@ -223,10 +223,23 @@ class TestVerdict(unittest.TestCase):
              "jingshui_core7": [{"no": i + 1, "item": "x", "verdict": "✓", "evidence": ""} for i in range(7)],
              "jingshui_5no": [{"no": i + 1, "item": "y", "verdict": "否"} for i in range(5)],
              "canslim": {k: "✓" for k in ("C", "A", "N", "S", "L", "I", "M")},
-             "lynch_class": "快速增长"}
+             "lynch_class": "快速增长",
+             "v5_three_layer": {"industry_beta": {"cycle_type": "强周期20年", "phase": "兑现段",
+                                                  "evidence_up": ["船价高位"],
+                                                  "evidence_down": ["订单增速回落"]}}}
         v2, errs = judge.load_verdict(self._write(v))
         self.assertEqual(errs, [])
         self.assertEqual(v2["stage"], "主升期")
+
+    def test_v5_missing_and_no_counter_evidence_warn(self):
+        """v5 三层判定校验: 缺失警告不阻塞; 行业反方证据缺失必警告(防追高合理化)。"""
+        v = {"stage": "主升期", "confidence": "高",
+             "v5_three_layer": {"industry_beta": {"cycle_type": "成长", "phase": "上行中",
+                                                  "evidence_up": ["订单满"], "evidence_down": []}}}
+        v2, errs = judge.load_verdict(self._write(v))
+        self.assertTrue(any("evidence_down" in e for e in errs))
+        v3, errs3 = judge.load_verdict(self._write({"stage": "主升期", "confidence": "低"}))
+        self.assertTrue(any("v5_three_layer" in e for e in errs3))
 
     def test_invalid_stage_falls_back_with_error(self):
         v = {"stage": "起飞期"}

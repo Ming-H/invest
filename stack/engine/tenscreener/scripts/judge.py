@@ -404,7 +404,9 @@ def quick_reject_md(name, code, qs, singles, reason):
                      "%s/%s/%s" % tuple(("%+.0f" % v) if v is not None else "—" for v in t["qoq"])])
     L += _tbl(["季", "单季亿(营/归/扣)", "同比%", "环比%"], rows)
     L += ["", "*依据: 静水核心因子#1「财报营收、利润增速≥40%」· 5不买#2「主营增速低于40%的不买」。*",
-          "*如需绕闸深读(边缘案例人工指定): `judge --code %s --force-full`*" % code]
+          "*如需绕闸深读(边缘案例人工指定): `judge --code %s --force-full`*" % code,
+          "*蜕变型提示(v5): 若该标的近期有重大资产重组/主业变更且新业务尚未并表, "
+          "上表三线是【旧业务】的 —— 属本闸门已知盲区(松发 2024 型), 用 `--force-full` 深读*"]
     return "\n".join(L)
 
 
@@ -738,8 +740,12 @@ def _split_chapters(txt, thick):
 
 
 def consensus(code, outdir):
-    """券商一致预期(经 cninfo-disclosure 研报模块, 东财免费源): 近12月研报数/评级分布/
-    最新盈利预测(EPS→预期PE)。jingshui 六段式第五段(机构一致预期与估值)的素材。"""
+    """券商一致预期+研报情报流(v5 升级, 2026-11-07): 经 cninfo-disclosure 研报模块
+    (东财免费源)。除旧统计(研报数/机构数/评级分布)外新增:
+      titles         近24篇研报标题流(日期|机构|评级|标题, 原样进素材包方便人工追踪)
+      eps_revisions  同一年内"今年EPS"首尾对比 → 上调/下调(一致预期修正方向)
+      coverage_by_year 逐年研报数(覆盖密度趋势: 3家→15家=关注度拐点, ≥20家=拥挤信号)
+    """
     import csv
     cli = _cninfo_cli()
     code6 = str(code).split(".")[0]
@@ -770,26 +776,58 @@ def consensus(code, outdir):
                 if n in str(k):
                     return row.get(k)
         return None
+    def _f(x):
+        try:
+            return float(str(x).strip())
+        except (TypeError, ValueError):
+            return None
     ratings = {}
     eps_recent = []
+    parsed = []                                  # [(date, org, rating, title, eps_this)]
     for r in rows:
+        dt = str(col(r, "日期") or "")
+        org = col(r, "机构", "来源") or ""
         rt = col(r, "评级") or ""
+        title = str(col(r, "报告标题", "标题") or "").strip()
         for key in ("买入", "增持", "推荐", "中性", "持有", "卖出"):
             if key in rt:
                 ratings[key] = ratings.get(key, 0) + 1
+                rt = key
                 break
-        eps = col(r, "预测年每股收益", "预测EPS", "EPS")
-        yr = col(r, "预测年份", "年度")
-        if eps:
-            try:
-                eps_recent.append((str(yr or ""), float(eps)))
-            except ValueError:
-                pass
+        eps_this = _f(col(r, "今年EPS"))
+        parsed.append((dt, org, rt, title, eps_this))
+        if eps_this is not None:
+            eps_recent.append((dt[:4], eps_this))
+    parsed.sort(key=lambda x: x[0] or "", reverse=True)       # 按日期降序
+    titles = ["%s | %s | %s | %s" % (dt, org, rating or "—", title or "—")
+              for dt, org, rating, title, _ in parsed[:24]]
+    # 一致预期修正: 同一日历年内发表的研报, "今年EPS"最早 vs 最新(同年目标的修正方向)
+    eps_rev = None
+    by_year = {}
+    for dt, _org, _rt, _t, e in parsed:
+        if dt and e is not None:
+            by_year.setdefault(dt[:4], []).append((dt, e))
+    for y in sorted(by_year, reverse=True):
+        seq = sorted(by_year[y])
+        if len(seq) >= 3 and seq[0][1] > 0:
+            chg = (seq[-1][1] / seq[0][1] - 1) * 100
+            eps_rev = "%s年目标: %s→%s (%+.0f%%, %d篇)" % (
+                y, seq[0][1], seq[-1][1], chg, len(seq)) + \
+                (" → 上调" if chg > 3 else (" → 下调" if chg < -3 else " → 持平"))
+            break
+    cov = {}
+    for dt, *_ in parsed:
+        if dt:
+            cov[dt[:4]] = cov.get(dt[:4], 0) + 1
     out = {"reports_12m": len(rows),
-           "orgs": len(set(col(r, "机构", "来源") for r in rows if col(r, "机构", "来源"))),
+           "orgs": len(set(o for _d, o, *_ in parsed if o)),
            "ratings": ratings,
            "eps_forecasts": eps_recent[-6:],
-           "latest_date": max((str(col(r, "日期") or "") for r in rows), default="")}
+           "latest_date": max((x[0] for x in parsed), default=""),
+           # v5 研报情报流
+           "titles": titles,
+           "eps_revisions": eps_rev,
+           "coverage_by_year": dict(sorted(cov.items(), reverse=True)[:4])}
     try:
         os.remove(csv_path)
     except Exception:
@@ -842,6 +880,31 @@ def build_pack(code, outdir, with_pdf=True, pdf_dir=None):
     cf = cashflow_leads(code6)
     cons = consensus(code6, outdir)
 
+    # ── v5 三层素材(2026-11-07): 行业板块/发现度表盘/背景调研 ──
+    import sector
+    ind_name, ind_concepts = None, None
+    board, bkperf, fund, members_n = None, {}, {}, 0
+    try:
+        ind_info = sector.stock_industry(code6) or {}
+        ind_name, ind_concepts = ind_info.get("industry"), ind_info.get("concepts")
+        if ind_name:
+            board = sector.find_board(ind_name, concepts=ind_concepts)
+            if board:
+                bkperf = sector.board_kline_perf(board["bk"])
+                fund = sector.industry_fundamentals(sector.board_members(board["bk"]))
+                members_n = fund.get("total") or 0
+    except Exception as e:
+        degrade("v5_sector", str(e)[:60])
+    disc = sector.discovery_dials(board, cons, hold, pos_1y=(m or {}).get("pos_1y"))
+    ind_profile = _industry_profile_path(ind_name)
+    try:
+        orgrow = (_sec_rows("RPT_F10_BASIC_ORGINFO", code6, sort=None) or [{}])[0]
+    except Exception:
+        orgrow = {}
+    background = {"industry": ind_name,
+                  "orginfo": {k: v for k, v in orgrow.items()
+                              if v and isinstance(v, (str, int, float)) and len(str(v)) < 60}}
+
     # ── 跨期趋势挖掘(确定性记分卡, 2026-11-05 用户定版: 单期是体检, 跨期才是趋势) ──
     jyps_list = comp.get("jyps") or []
     guidance = trend.extract_guidance(texts, jyps_list)
@@ -858,6 +921,11 @@ def build_pack(code, outdir, with_pdf=True, pdf_dir=None):
             "quality": qual, "balance_leads": bal, "income_leads": inc, "cashflow": cf, "holders": hold,
             "composition": comp, "price": m, "market_gate": gate,
             "forecast": fc, "stage_pre": stage_pre, "consensus": cons,
+            "industry": {"name": ind_name, "board": board, "perf": bkperf,
+                         "fundamentals": fund, "members_n": members_n,
+                         "profile": ind_profile},
+            "discovery": disc,
+            "background": background,
             "trend": {"guidance": guidance, "guidance_rev": gv, "guidance_np": gv2,
                       "holders_tl": holders_tl, "keywords": kw, "leads": leads,
                       "scorecard": card, "pdf_dir": [pdf_dir_resolved, pdf_src]},
@@ -875,6 +943,31 @@ def build_pack(code, outdir, with_pdf=True, pdf_dir=None):
 def _tbl(headers, rows):
     return ["| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)] + \
            ["| " + " | ".join(str(c) if c is not None else "—" for c in r) + " |" for r in rows]
+
+
+def _industry_profile_path(ind_name):
+    """行业档案挂载: references/industries/ 下找头部含板块名(或『别名』行含之)的档案。
+    档案头部约定: 首部含板块名或『别名: a/b/c』行。命中返回路径, 未命中 None。"""
+    if not ind_name:
+        return None
+    root = os.path.normpath(os.path.join(HERE, "..", "references", "industries"))
+    if not os.path.isdir(root):
+        return None
+    for fn in sorted(os.listdir(root)):
+        if not fn.endswith(".md"):
+            continue
+        path = os.path.join(root, fn)
+        try:
+            head = open(path, encoding="utf-8").read(500)
+        except OSError:
+            continue
+        hit = ind_name in head
+        if not hit and "别名" in head:
+            alias_line = next((l for l in head.splitlines() if "别名" in l), "")
+            hit = ind_name in alias_line
+        if hit:
+            return path
+    return None
 
 
 def _fmt_yoy(v):
@@ -971,10 +1064,56 @@ def _render_pack_md(pack, texts):
             L += ["## 六、经营评述(%s, API)" % rd, "", rv[:2600], ""]
     cons = p.get("consensus") or {}
     if cons.get("reports_12m"):
-        L += ["## 六B、券商一致预期(近12月研报)", "",
+        L += ["## 六B、券商一致预期与研报情报流", "",
               "- 研报 %s 篇 / 覆盖机构 %s 家 / 最近 %s" % (cons.get("reports_12m"), cons.get("orgs"), cons.get("latest_date")),
               "- 评级分布: %s" % (json.dumps(cons.get("ratings") or {}, ensure_ascii=False)),
-              "- 盈利预测(EPS): %s" % (cons.get("eps_forecasts") or "无数据"), ""]
+              "- 盈利预测(EPS): %s" % (cons.get("eps_forecasts") or "无数据"),
+              "- 一致预期修正: %s" % (cons.get("eps_revisions") or "数据不足"),
+              "- 覆盖密度(逐年研报数): %s" % (json.dumps(cons.get("coverage_by_year") or {}, ensure_ascii=False) or "无")]
+        if cons.get("titles"):
+            L += ["", "**研报标题流(新→旧, 供人工追踪; 提炼关键词: 扩产/订单/涨价/出海/首次覆盖/下调)**:", ""]
+            L += ["- %s" % t for t in cons["titles"][:24]]
+        L.append("")
+
+    # ── v5 三层素材节(2026-11-07): 背景 / 行业 / 发现度 ──
+    bg = p.get("background") or {}
+    if bg.get("industry") or bg.get("orginfo"):
+        L += ["## 五B、背景调研(蜕变线索)", "",
+              "- 所属行业板块: %s" % (bg.get("industry") or "未知"),
+              "- 公司档案: %s" % (json.dumps(bg.get("orginfo") or {}, ensure_ascii=False)[:600]),
+              "- 蜕变证据: 对照第五节主营构成**跨期 diff**——新出现/消失的构成项即主业变更的硬证据;"
+                "叠加第七节厚报告『重大资产重组』表述与研报标题流交叉验证。", ""]
+    ind = p.get("industry") or {}
+    if ind.get("name"):
+        bd = ind.get("board") or {}
+        perf = ind.get("perf") or {}
+        fund = ind.get("fundamentals") or {}
+        L += ["## 五C、行业素材(实时, 行业β与时代β证据)", "",
+              "- 行业板块: **%s**(成分 %s 只)" % (ind.get("name"), ind.get("members_n") or "—")]
+        if bd:
+            L.append("- 当日板块榜: 第 %s 名 / 涨跌 %s%%(上涨 %s 家·下跌 %s 家)——**仅作发现度表盘, "
+                     "不进行业β**(资金不热正是机会)" % (bd.get("rank"), bd.get("pct"),
+                                                        bd.get("up_n"), bd.get("down_n")))
+        if perf:
+            L.append("- 板块指数表现: 60日 %s%% / 250日 %s%%" % (
+                perf.get("gain_60d", "—"), perf.get("gain_250d", "—")))
+        if fund:
+            L.append("- **行业景气实证(财报侧)**: 板块内双线同比>%s%%公司 **%s 只**/%s 只"
+                     "(报告期 %s)%s" % (fund.get("pass_line"), fund.get("pass_n"),
+                                          fund.get("total"), fund.get("report_date") or "—",
+                                          "; 如 " + "、".join(fund.get("pass_names") or []) if fund.get("pass_names") else ""))
+        if ind.get("profile"):
+            L += ["", "**行业档案已挂载 → 判定时必读**: `%s`" % ind["profile"],
+                  "(周期结构/时钟判定方法/信号字典/历史十倍股/反方证据区)"]
+        else:
+            L += ["", "(无匹配行业档案 —— Q2 行业β判定按公开信息现场检索核验, 证据带出处)"]
+        L.append("")
+    disc = p.get("discovery") or {}
+    if disc:
+        L += ["## 四B、发现度表盘(Q4: 是不是时候)", "",
+              "- 相位: **%s** —— %s" % (disc.get("phase"), disc.get("note")),
+              "- 判读: 未发现+行业β上行=左侧黄金错杀(scout 哲学); 发现中=右侧跟随(runner/watch); "
+              "拥挤=潜在新增买家枯竭(风险, 与 Q5 联动)。", ""]
 
     if texts:
         L += ["## 七、报告章节原文(两厚两薄, 判定素材)", ""]
@@ -1020,13 +1159,41 @@ def _render_pack_md(pack, texts):
     L += ["*PDF 归档: %s (%s)*" % (pdir[0], pdir[1]), ""]
 
     L += ["## 九、判定任务(填 verdict.json)", "",
-          "读上方素材 + jingshui(核心因子7条/5不买) + can-slim(七要素) + lynch(六分类)标准, 写同目录 verdict.json:",
+          "读上方素材 + 行业档案(references/industries/{所属行业}.md, 按第五B节挂载) + "
+          "jingshui(核心因子7条/5不买) + can-slim(七要素) + lynch(六分类)标准, 写同目录 verdict.json。",
+          "判定顺序=五问漏斗: Q1时代β→Q2行业β→Q3个股α→Q4发现度→Q5信号与风险;",
+          "三典标尺不变, 但核心因子#4/#7 与 lynch 六分类**必须引用 v5_three_layer 的证据**:",
           "```json",
           json.dumps({
               "code": p["code"], "name": p["name"],
               "is_tenbagger_candidate": True, "confidence": "高/中/低",
               "stage": "主升期/强势待确认/回调击球区/深调考验区/退潮/利润未兑现/预告爆发",
               "stage_reason": "≤60字, 需引用素材中的证据",
+              "v5_three_layer": {
+                  "era_beta": {"mainline": "当代主线名(对照 主线脉络.md+实时政策)",
+                               "fit": "主线核心/主线延伸/沾边/无",
+                               "policy_now": ["实时政策/产业新闻, 每条带来源+日期"],
+                               "market_now": "主线行业指数表现(素材第五B节)"},
+                  "industry_beta": {"sector": "", "cycle_type": "强周期20年/成长/成长周期混合",
+                                    "phase": "底部启动/上行中/兑现段/顶部区/下行",
+                                    "years_since_peak": None, "lead_lag": "利润滞后订单N年(防兑现段误判)",
+                                    "fundamentals": "行业景气实证(过线公司数/行业量价, 带出处)",
+                                    "evidence_up": ["上行证据≤2条带出处"],
+                                    "evidence_down": ["见顶/反方证据≤2条 ——【强制,不许只写多头】"]},
+                  "nature": {"class": "纯周期/周期成长/纯成长",
+                             "price_driver": "价弹性来源(量价分解)", "volume_driver": "量弹性来源",
+                             "staircase": "这轮周期后比上轮大多少?(上台阶=成长,回原点=纯周期)+证据"},
+                  "capacity": {"now": "当前产能", "planned": "规划产能+达产年",
+                               "multiple": None, "source": "年报募投表/研报"},
+                  "metamorphosis": {"from": "旧业务", "event": "重组/变更事件+年份",
+                                    "to": "新内核", "counter": "反方:跨界失败率/业绩承诺风险"},
+                  "research_intel": {"summary": "≤80字: 研报共识讲什么故事(扩产/订单/涨价/出海/首次覆盖)",
+                                     "eps_revisions": "上调/下调/持平(素材第六B节EPS修正)",
+                                     "coverage_trend": "覆盖机构数趋势"},
+                  "discovery": {"phase": "未发现(左侧黄金)/发现中/拥挤",
+                                "dials": "资金/机构/筹码三表盘读数(素材第四B节)",
+                                "combo": "行业β×发现度= 左侧错杀/右侧跟随/拥挤"},
+                  "falsifiers": ["每条正向判定配一个证伪条件(什么数据出现即推翻)"]},
               "jingshui_core7": [{"no": 1, "item": "营收利润增速≥40%", "verdict": "✓/✗/部分", "evidence": "≤40字"}],
               "jingshui_5no": [{"no": 1, "item": "亏损公司?", "verdict": "✗/✓", "evidence": ""}],
               "canslim": {"C": "✓/✗/部分:证据", "A": "", "N": "", "S": "", "L": "", "I": "", "M": ""},
@@ -1035,8 +1202,8 @@ def _render_pack_md(pack, texts):
               "trend_signals": {"guidance": "连续上调/上调/维持/下调/无数据",
                                 "national_team": "增强/在场/退出/无数据",
                                 "narrative": "≤40字, 对比两期MD&A措辞变化(新出现/消失了什么)",
-                                "leads": "≤40字, 先行指标综合方向"},
-              "tps_qualitative": {"F1行业空间": "≤60字", "F5催化": "", "F6生意模式": ""},
+                                "leads": "≤40字, 先行指标综合方向(按行业档案信号字典释义)"},
+              "tps_qualitative": {"F1行业空间": "≤60字(须引行业β时钟)", "F5催化": "", "F6生意模式": ""},
               "pdf_summary": {"2025年报": "≤150字: 行业景气表述/经营要点增量/募投进展/主要风险/非经常",
                               "2026半年报": "同上(精读第七节该报告章节原文后总结)",
                               "跨期对比": "两厚报告对读≤150字: 景气措辞/经营要点/募投节奏/风险条目 的变化方向"},
@@ -1047,7 +1214,11 @@ def _render_pack_md(pack, texts):
           "**pdf_summary(2026-11-05 新增)**: 键=第七节两厚报告的 cn 标签 +『跨期对比』; "
           "每份厚报告总结一段(行业景气措辞/经营要点较上期增量/募投投产节奏/风险章节提示/非经常); "
           "『跨期对比』= 两厚**对读**找变化趋势: 什么表述新出现/消失了、景气定调升降、"
-          "募投与产能节奏快慢、风险条目增减——与第八节 C表述漂移/叙述漂移互相印证。", ""]
+          "募投与产能节奏快慢、风险条目增减——与第八节 C表述漂移/叙述漂移互相印证。", "",
+          "**v5 五问纪律**: ①evidence_down 为空 → 校验警告(防追高合理化); "
+          "②周期位置必须带锚点(距上轮顶点年数/量价数据), 不许只写\"景气向上\"; "
+          "③每条行业/政策证据带出处+日期, 当场核验不留待查; "
+          "④核心因子#4(时代α)/#7(政策)与 lynch 分类的判定必须引用 v5_three_layer 字段。", ""]
     return "\n".join(L)
 
 
@@ -1099,6 +1270,17 @@ def load_verdict(path):
     v.setdefault("tps_qualitative", {})
     v.setdefault("risks", [])
     v.setdefault("watch_next", [])
+    # ── v5 三层判定校验(2026-11-07): 缺失警告不阻塞; 行业反方证据强制 ──
+    v5 = v.get("v5_three_layer")
+    if not isinstance(v5, dict) or not v5:
+        errs.append("v5_three_layer 缺失 —— 未做五问判定(时代β/行业β/个股α/发现度), 报告将标注")
+        v["v5_three_layer"] = {}
+    else:
+        ib = v5.get("industry_beta") or {}
+        if ib and not (ib.get("evidence_down") or []):
+            errs.append("industry_beta.evidence_down 为空 —— 行业判定缺反方证据(防追高合理化), 必须补")
+        if ib and ib.get("phase") and not ib.get("cycle_type"):
+            errs.append("industry_beta.cycle_type 缺失(周期时钟类型未判)")
     return v, errs
 
 
@@ -1116,6 +1298,59 @@ def render_report(pack, verdict, errs):
           "- **阶段预判(纯算法对照)**: %s" % (pack.get("stage_pre") or ("—",))[0],
           "- **清单结论: %s**" % verdict.get("conclusion", "—"),
           "- **林奇分类: %s** —— %s" % (verdict.get("lynch_class"), verdict.get("lynch_reason")), ""]
+    # ── v5 三层判定章(时代β→行业β→个股α→发现度, 2026-11-07) ──
+    v5 = verdict.get("v5_three_layer") or {}
+    if v5:
+        eb = v5.get("era_beta") or {}
+        ib = v5.get("industry_beta") or {}
+        na = v5.get("nature") or {}
+        mt = v5.get("metamorphosis") or {}
+        cp = v5.get("capacity") or {}
+        ri = v5.get("research_intel") or {}
+        dc = v5.get("discovery") or {}
+        L += ["## 三层判定(v5: 时代β → 行业β → 个股α → 发现度)", "",
+              "**Q1 时代β**: %s —— fit=%s" % (eb.get("mainline") or "未判", eb.get("fit") or "未判"),
+              "- 政策侧(实时): %s" % ("; ".join(eb.get("policy_now") or []) or "无"),
+              "- 市场侧(实时): %s" % (eb.get("market_now") or "无"), "",
+              "**Q2 行业β(纯基本面)**: %s · %s" % (ib.get("sector") or "—", ib.get("cycle_type") or "未判"),
+              "- 周期阶段: **%s**(距上轮顶 %s 年 · %s)" % (
+                  ib.get("phase") or "未判",
+                  ib.get("years_since_peak") if ib.get("years_since_peak") is not None else "?",
+                  ib.get("lead_lag") or "无 lead_lag 注记"),
+              "- 景气实证: %s" % (ib.get("fundamentals") or "无"),
+              "- 上行证据: %s" % ("; ".join(ib.get("evidence_up") or []) or "无"),
+              "- **见顶/反方证据: %s**" % ("; ".join(ib.get("evidence_down") or []) or "⚠未提供"), "",
+              "**Q3 个股α**: 属性=%s" % (na.get("class") or "未判")]
+        if mt.get("event"):
+            L.append("- 蜕变: %s → %s(%s) · 反方: %s" % (
+                mt.get("from"), mt.get("to"), mt.get("event"), mt.get("counter") or "未评估"))
+        if na.get("price_driver") or na.get("volume_driver"):
+            L.append("- 量价分解: 价[%s] × 量[%s] · 台阶: %s" % (
+                na.get("price_driver") or "—", na.get("volume_driver") or "—", na.get("staircase") or "未判"))
+        if cp.get("now") or cp.get("planned"):
+            L.append("- 产能: %s → %s(倍数 %s · %s)" % (
+                cp.get("now") or "—", cp.get("planned") or "—",
+                cp.get("multiple") if cp.get("multiple") is not None else "?",
+                cp.get("source") or "无出处"))
+        if ri.get("summary"):
+            L.append("- 研报情报: %s · EPS修正=%s · 覆盖趋势=%s" % (
+                ri.get("summary"), ri.get("eps_revisions") or "—", ri.get("coverage_trend") or "—"))
+        L += ["", "**Q4 发现度**: %s —— %s" % (dc.get("phase") or "未判", dc.get("combo") or ""),
+              "- 表盘: %s" % (dc.get("dials") or "无"), ""]
+        # 确定性风险检测器(代码算, 不靠自觉)
+        if na.get("class") in ("纯周期", "周期成长") and ib.get("phase") in ("兑现段", "顶部区"):
+            pe = (pack.get("quote") or {}).get("pe")
+            L.append("> ⚠️ **周期顶 PE 幻觉警示**: 标的为%s属性且行业处「%s」——当前 PE(%s)是利润顶的"
+                     "倒影而非便宜。周期顶=利润最漂亮=PE最低=最像\"便宜成长股\"的时刻, "
+                     "持有纪律参照 track E1/E3, 不因低PE加仓。" % (na.get("class"), ib.get("phase"), pe or "—"))
+        if dc.get("phase") == "拥挤":
+            L.append("> ⚠️ **发现度拥挤警示**: 研报覆盖趋于饱和+资金热度高位的组合=潜在新增买家枯竭"
+                     "(静水\"人多的地方不要去\")。对照第五节覆盖机构数与股东户数趋势核验。")
+        if v5.get("falsifiers"):
+            L += ["", "**证伪条件**: "] + ["- %s" % f for f in v5["falsifiers"]]
+        L.append("")
+    else:
+        L += ["## 三层判定(v5)", "", "> ⚠ 本判定未包含 v5_three_layer(五问未走), 仅有个股层结论。", ""]
     qt = p.get("quarterly_table") or []
     qs = p.get("qs") or {}
     if qt:
