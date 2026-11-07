@@ -48,9 +48,13 @@ def evaluate(l2_results, sector_max_cap=None):
             pg_latest = l1.get("profit_growth")
 
         pe = m.get("pe")
+        # PEG 增速口径(2026-11-07 修正): 优先 L1 年度累计归母同比(最新报告期累计,
+        # 更贴林奇 PEG 的年度增速语义), 单季同比仅兜底——Q4/低基数单季会把 PEG 算得
+        # 过低、F7 虚高。增速封顶100(林奇惯例防高增速算出荒谬低PEG)。
+        peg_growth = l1.get("profit_growth") or pg_latest
         peg = None
-        if pe and pg_latest and pg_latest > 0 and pe > 0:
-            peg = pe / min(pg_latest, 100)    # 增速封顶100(林奇惯例)
+        if pe and peg_growth and peg_growth > 0 and pe > 0:
+            peg = pe / min(peg_growth, 100)
 
         mv = m.get("circ_mv")
         mvy = mv / 1e8 if mv else None

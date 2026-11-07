@@ -178,25 +178,41 @@ def scan(min_gain_1y=60, pass_line=40.0, max_mv=2000, top_kline=30, top=15,
     # Step2: 动量TopN 拉K线(免额度);K线自算 g1y 做动量闸——问财"近一年涨跌幅大于X%"
     # 条件值不随条件返回(实测), 故 2026-11-07 起两种模式统一用 K 线兜底验证;
     # 东财模式另按 g1y 重排(其粗筛无价格条件)。
+    # 并发拉取(2026-11-07): 东财模式 240+ 只串行约 2-4 分钟 → 8 线程压到 ~30 秒
+    # (腾讯接口可扛; kline 缓存按 symbol 分文件, 线程安全)。
     # (截断放大且下限240:2026中报季增速分布极端,+242%只排223/372,小截断会丢主线票)
     cap = max(top_kline * 4, 240) if use_em else top_kline
     picked = sorted(rows, key=lambda r: r.get("profit_growth") or 0,
                     reverse=True)[:cap]
-    survivors = []
-    for r in picked:
+    end = date.today().isoformat()
+
+    def _kline_one(r):
         try:
-            kl = kline.fetch_qfq(to_symbol(r["code"]), beg, date.today().isoformat())
-            m = kline.series_metrics(kl)
-            if len(kl) > 250:                       # K线自算近1年涨幅做动量闸(统一兜底)
-                g1y = (float(kl[-1][2]) / float(kl[-250][2]) - 1) * 100
-                r["g1y"] = round(g1y, 1)
-                if g1y < min_gain_1y:
-                    continue
-            r["m"] = m
-            survivors.append(r)
+            kl = kline.fetch_qfq(to_symbol(r["code"]), beg, end)
         except Exception as e:
-            if verbose:
-                print(f"  [K线跳过] {r['name']}: {e}", file=sys.stderr)
+            r["_kline_err"] = str(e)[:60]
+            return None
+        m = kline.series_metrics(kl)
+        if len(kl) > 250:                           # K线自算近1年涨幅做动量闸(统一兜底)
+            g1y = (float(kl[-1][2]) / float(kl[-250][2]) - 1) * 100
+            r["g1y"] = round(g1y, 1)
+            if g1y < min_gain_1y:
+                return None
+        r["m"] = m
+        return r
+
+    from concurrent.futures import ThreadPoolExecutor
+    survivors = []
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for r, res in zip(picked, ex.map(_kline_one, picked)):
+            if res is not None:
+                survivors.append(res)
+                continue
+            err = r.pop("_kline_err", None)
+            if verbose and err:
+                print(f"  [K线跳过] {r['name']}: {err}", file=sys.stderr)
+            elif verbose and r.get("g1y") is not None:
+                print(f"  [动量未过] {r['name']} 近1年{r['g1y']}%<{min_gain_1y}%", file=sys.stderr)
     if use_em:
         survivors.sort(key=lambda r: -(r.get("g1y") or 0))
     picked = survivors[:top_kline]

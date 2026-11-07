@@ -36,9 +36,13 @@ OUTROOT = os.path.join(os.path.dirname(HERE), "outputs", "judge")
 SEC_HOST = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
 UA = {"User-Agent": "Mozilla/5.0", "Referer": "https://data.eastmoney.com"}
 
-# cninfo-disclosure 底座 cli 的探测位置(同 flow.py 先例: 同级技能优先)
+# cninfo-disclosure 底座 cli 的探测位置(同 flow.py 先例: 同级技能优先;
+# 2026-11-07 加环境变量 CNINFO_CLI 与 TENSCREENER_SKILLS_DIR —— 仓库公开后他人路径各异)
 CNINFO_CLI_CANDIDATES = [
+    os.environ.get("CNINFO_CLI") or "",
     os.path.join(os.path.dirname(HERE), "cninfo-disclosure", "scripts", "cli.py"),
+    os.path.join(os.environ.get("TENSCREENER_SKILLS_DIR") or "/nonexistent",
+                 "cninfo-disclosure", "scripts", "cli.py"),
     os.path.expanduser("~/Documents/work/.claude/skills/cninfo-disclosure/scripts/cli.py"),
     os.path.expanduser("~/.claude/skills/cninfo-disclosure/scripts/cli.py"),
 ]
@@ -166,13 +170,14 @@ def publish(code, folder=None):
     exp = "/tmp/ts_judge_publish_%s.md" % code6
     open(exp, "w", encoding="utf-8").write(open(path, encoding="utf-8").read())
     import subprocess
-    cmd = ('cd /tmp && "%s" drive +import --file %s --type docx '
-           '--name "%s(%s)十倍股判定 %s" --as user' %
-           (LARK, os.path.basename(exp), name, code6, asof))
+    # list 形式 + cwd(2026-11-07: 旧 shell=True 拼接, 股票名含引号/\$ 会破命令)
+    cmd = [LARK, "drive", "+import", "--file", os.path.basename(exp),
+           "--type", "docx", "--name", "%s(%s)十倍股判定 %s" % (name, code6, asof),
+           "--as", "user"]
     if folder_tok:
-        cmd += ' --folder-token %s' % folder_tok
+        cmd += ["--folder-token", folder_tok]
     try:
-        p = subprocess.run(cmd, shell=True, capture_output=True, timeout=300)
+        p = subprocess.run(cmd, cwd="/tmp", capture_output=True, timeout=300)
         out = (p.stdout or b"").decode("utf-8", "ignore")
     except Exception as e:
         print("飞书发布失败: %s" % str(e)[:120])

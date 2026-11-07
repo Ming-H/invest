@@ -4,11 +4,12 @@ watchlist 状态存储 + 生命周期状态机 · tenscreener
 
 状态机(非法迁移抛错;save 前自动 .bak 备份):
     scouted ──confirm(脚本自动)──► confirmed ──promote(人工)──► holding
-       │                               │                          │ ▲
-       └──invalidated(脚本自动)──► closed◄──invalidated/清仓────┘ │
+       ▲  │                          │ │                        │ ▲
+       │  └──invalidated(脚本自动)──►closed◄─invalidated/清仓──┘ │
+       │            (confirmed→scouted=人工降级重观察)│            │
+       └──────────── reopen(人工) ◄──────────────┘               │
                                   ▲                               │
                                   └──exit_signal(自动告警)──人工否决keep──┘
-    closed ──reopen(人工)──► scouted
 
 纪律:脚本只自动迁移 confirm(右侧确认)与 invalidated(证伪);
      holding 的进入(promote)与退出(close)永远人工执行 —— 不荐股、不给买卖点。
@@ -30,6 +31,7 @@ TRANSITIONS = {
     ("scouted", "closed"),         # 证伪 R4(脚本自动)
     ("confirmed", "holding"),      # 人工建仓(track promote)
     ("confirmed", "closed"),       # 人工移除/证伪
+    ("confirmed", "scouted"),      # 人工降级重观察(watch reopen, 2026-11-07 补)
     ("holding", "exit_signal"),    # exit_check level=exit(自动告警,非指令)
     ("exit_signal", "holding"),    # 人工否决告警,继续持有(track keep)
     ("exit_signal", "closed"),     # 人工清仓

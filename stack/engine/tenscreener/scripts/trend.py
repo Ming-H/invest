@@ -186,7 +186,7 @@ def holders_timeline(freeholder_rows, n_periods=4):
         for r in by_end[e]:
             ids.setdefault(holder_identity(r.get("HOLDER_NAME")), []).append(r.get("HOLDER_NAME"))
         tl.append({"period": e, "by_id": {k: v for k, v in ids.items() if k != "其他机构"},
-                   "n_inst": len([1 for k in ids if k != "其他机构"])})
+                   "n_inst": sum(len(v) for k, v in ids.items() if k != "其他机构")})
     # 国家队信号(社保+汇金证金): 家数/出现 跨期对比
     nt_counts = []
     for t in tl:
@@ -333,9 +333,11 @@ def scorecard(guidance_v, kw, holders_tl, leads, ana):
     score = 0
     for r in rows:
         d = str(r.get("方向"))
+        if "放缓" in d or "数据不足" in d or "参考" in d or "无数据" in d or "无信号" in d:
+            continue                                   # 中性/缺数据不计分
         if any(k in d for k in ("连续上调", "上调", "增强", "加速升", "↑", "上升词占优", "升")) and "降" not in d and "退出" not in d:
             score += 1
-        elif any(k in d for k in ("下调", "退出", "降", "风险词占优")):
+        elif any(k in d for k in ("下调", "退出", "降", "风险词占优", "弱")):
             score -= 1
     return {"rows": rows, "score": score,
             "verdict": "上升态势" if score >= 3 else ("偏上行" if score >= 1 else ("中性/混合" if score >= -1 else "下行态势"))}

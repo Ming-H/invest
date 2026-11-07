@@ -21,14 +21,18 @@ from datetime import date
 
 def _probe_cli(skill):
     """问财 CLI 多位置探测(2026-11-05: ~/.claude/skills 已废弃, 官方技能装在
-    work/.claude/skills; 不修则 L1/runner/watch 全部静默降级 —— flow.py 同款雷)。"""
-    cands = [os.path.expanduser(p) for p in (
-        "~/Documents/work/.claude/skills/%s/scripts/cli.py" % skill,
-        "~/.claude/skills/%s/scripts/cli.py" % skill)]
+    work/.claude/skills; 不修则 L1/runner/watch 全部静默降级 —— flow.py 同款雷)。
+    2026-11-07: 仓库已公开, 他人安装路径各异 → 优先环境变量
+    TENSCREENER_SKILLS_DIR(指向 skills 根目录), 再试默认两处。"""
+    env_root = os.environ.get("TENSCREENER_SKILLS_DIR")
+    cands = ([os.path.join(env_root, skill, "scripts", "cli.py")] if env_root else []) + \
+        [os.path.expanduser(p) for p in (
+            "~/Documents/work/.claude/skills/%s/scripts/cli.py" % skill,
+            "~/.claude/skills/%s/scripts/cli.py" % skill)]
     for p in cands:
         if os.path.exists(p):
             return p
-    return cands[0]
+    return cands[-1]
 
 
 DEFAULT_FINANCE_CLI = _probe_cli("hithink-finance-query")

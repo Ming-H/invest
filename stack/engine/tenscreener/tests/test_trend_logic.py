@@ -108,6 +108,25 @@ class TestScorecard(unittest.TestCase):
         self.assertGreaterEqual(card["score"], 4)
         self.assertEqual(card["verdict"], "上升态势")
 
+    def test_slowdown_and_weak_not_positive(self):
+        """校准(2026-11-07): '升(放缓)'是弱化信号不加分; 三线'弱'计负分。"""
+        gv = {"dir": "无数据", "steps": []}
+        kw = {"trend": "无信号", "up_total": 0, "risk_total": 0}
+        ht = {"national_team": {"dir": "无数据", "evidence": []}}
+        leads = [{"信号": "合同负债", "方向": "升(放缓)", "证据": "x", "释义": ""},
+                 {"信号": "参考", "方向": "参考", "证据": "y", "释义": ""}]
+        card = trend.scorecard(gv, kw, ht, leads, {"streak_max": 0, "resonance": "none"})
+        self.assertEqual(card["score"], -1)            # 只有 G 三线"弱"计-1
+
+    def test_n_inst_counts_holders_not_categories(self):
+        """n_inst=机构家数(2026-11-07 语义修复): 两家社保=2, 不是身份类别数。"""
+        rows = [{"END_DATE": "2026-09-30", "HOLDER_NAME": "全国社保基金一零四组合"},
+                {"END_DATE": "2026-09-30", "HOLDER_NAME": "基本养老保险基金八零二组合"},
+                {"END_DATE": "2026-09-30", "HOLDER_NAME": "香港中央结算有限公司"},
+                {"END_DATE": "2026-09-30", "HOLDER_NAME": "张三"}]
+        out = trend.holders_timeline(rows)
+        self.assertEqual(out["timeline"][0]["n_inst"], 3)   # 2社保+1北向=3家
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

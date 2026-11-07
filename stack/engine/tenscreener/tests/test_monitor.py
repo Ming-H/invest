@@ -151,6 +151,12 @@ class TestWatchlistStateMachine(unittest.TestCase):
         with self.assertRaises(wl.IllegalTransition):
             wl.transition(self.w, "003010", "exit_signal")   # scouted→exit_signal 非法
 
+    def test_confirmed_can_reopen_to_scouted(self):
+        """人工降级重观察(2026-11-07 补边): confirmed→scouted 合法。"""
+        wl.transition(self.w, "003010", "confirmed", note="R123")
+        wl.transition(self.w, "003010", "scouted", note="人工降级重观察")
+        self.assertEqual(self.w["items"][0]["state"], "scouted")
+
     def test_save_and_load_roundtrip_with_bak(self):
         import tempfile
         d = tempfile.mkdtemp()
