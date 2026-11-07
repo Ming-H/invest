@@ -308,40 +308,75 @@ GATE_TH = 40.0       # 静水字面增速线(与族 PASS_LINE 一致)
 GATE_MIN_NP = 5e7    # 扭亏通道当季归母下限(0.5亿)
 
 
-def gate_verdict(qs, singles):
+def _forecast_gate_ok(forecast, latest):
+    """预告爆发通道:预告中枢倒推 pass 且预告报告期晚于最新已披露期。
+    出处:静水财报分析框架§一.1"预告类取中枢测算,倒推最新单季环比/同比"
+    (松发/源杰/寒武纪型 —— v4.1 硬闸曾把这类"最早捕获目标"秒否, 2026-11-07 补全)。"""
+    return bool(forecast and forecast.get("pass") and forecast.get("period")
+                and (not latest or forecast["period"] > latest))
+
+
+def gate_verdict(qs, singles, forecast=None):
     """纯函数闸门(可离线单测) -> (passed, reason, latest, kind)。
-    kind: pass / reject / nodata(数据源故障不否决)。"""
+    kind: pass / reject / nodata(数据源故障不否决)。
+    通道优先级:三线40% > 扭亏通道(归母≥0.5亿) > 预告爆发通道(forecast 中枢倒推爆发,
+    且预告期晚于已披露期)——豁免一切 reject。预告通道=允许深读, 不是买入判定
+    (5不买#1/#2 仍由 Stage3 三典判定把关, 对应"利润未兑现/预告爆发"阶段)。"""
     latest = (qs or {}).get("latest_period")
     if not latest:
         return False, "F10 三线数据不可得", None, "nodata"
+    passed, reason, kind = None, None, None
     rev, np_, ded = (singles or {}).get(latest) or (None, None, None)
     lbl = {"rev": "营收", "np": "归母", "ded": "扣非"}
+    seg_all = " ".join("%s%s" % (lbl[k], ("%+.1f%%" % ((qs.get(k_map) or {}).get(latest)))
+                                 if (qs.get(k_map) or {}).get(latest) is not None else "同比不可算")
+                       for k, k_map in (("rev", "rev_yoy"), ("np", "parent_yoy"), ("ded", "deduct_yoy")))
     if (np_ is not None and np_ <= 0) or (ded is not None and ded <= 0):
-        return False, ("当季亏损出局(归母%s/扣非%s)"
-                       % tuple(("%.1f亿" % (v / 1e8)) if v is not None else "—" for v in (np_, ded))), latest, "reject"
-    yys = {"rev": (qs.get("rev_yoy") or {}).get(latest),
-           "np": (qs.get("parent_yoy") or {}).get(latest),
-           "ded": (qs.get("deduct_yoy") or {}).get(latest)}
-    comp = {k: v for k, v in yys.items() if v is not None}
-    seg_all = " ".join("%s%s" % (lbl[k], ("%+.1f%%" % yys[k]) if yys[k] is not None else "同比不可算")
-                       for k in ("rev", "np", "ded"))
-    if any(v <= GATE_TH for v in comp.values()):
-        return False, "当季同比未全过40%%线(%s; 可算侧须全>40%%)" % seg_all, latest, "reject"
-    if not any(k in ("np", "ded") for k in comp):        # 归母+扣非同比全不可算=扭亏类
-        if np_ is None or np_ < GATE_MIN_NP:
-            return False, ("扭亏规模不足(归母/扣非同比全不可算, 当季归母%s < 0.5亿)"
-                           % (("%.1f亿" % (np_ / 1e8)) if np_ is not None else "缺值")), latest, "reject"
-        return True, "扭亏通道过闸(当季归母%.1f亿≥0.5亿, %s)" % (np_ / 1e8, seg_all), latest, "pass"
-    return True, "当季三线同比全>40%%(%s)" % seg_all, latest, "pass"
+        passed, kind = False, "reject"
+        reason = ("当季亏损出局(归母%s/扣非%s)"
+                  % tuple(("%.1f亿" % (v / 1e8)) if v is not None else "—" for v in (np_, ded)))
+    else:
+        yys = {"rev": (qs.get("rev_yoy") or {}).get(latest),
+               "np": (qs.get("parent_yoy") or {}).get(latest),
+               "ded": (qs.get("deduct_yoy") or {}).get(latest)}
+        comp = {k: v for k, v in yys.items() if v is not None}
+        if any(v <= GATE_TH for v in comp.values()):
+            passed, kind = False, "reject"
+            reason = "当季同比未全过40%%线(%s; 可算侧须全>40%%)" % seg_all
+        elif not any(k in ("np", "ded") for k in comp):   # 归母+扣非同比全不可算=扭亏类
+            if np_ is None or np_ < GATE_MIN_NP:
+                passed, kind = False, "reject"
+                reason = ("扭亏规模不足(归母/扣非同比全不可算, 当季归母%s < 0.5亿)"
+                          % (("%.1f亿" % (np_ / 1e8)) if np_ is not None else "缺值"))
+            else:
+                passed = True
+                reason = "扭亏通道过闸(当季归母%.1f亿≥0.5亿, %s)" % (np_ / 1e8, seg_all)
+        else:
+            passed = True
+            reason = "当季三线同比全>40%%(%s)" % seg_all
+    if not passed and _forecast_gate_ok(forecast, latest):
+        return True, ("预告爆发通道过闸(%s @%s, 中枢单季%s亿 —— 静水预告倒推法; "
+                      "实绩三线: %s)" % (forecast.get("basis"), forecast.get("period"),
+                                          forecast.get("single_yi"), seg_all)), latest, "pass"
+    return passed, reason, latest, (kind or ("pass" if passed else "reject"))
 
 
 def stage1_gate(code):
-    """Stage1 取数+闸门(F10免费源, 秒级)。-> (passed, qs, singles, reason, latest, kind)"""
+    """Stage1 取数+闸门(F10免费源, 秒级)。-> (passed, qs, singles, reason, latest, kind)
+    不过闸时补查业绩预告(免费)——预告中枢倒推爆发则走预告通道过闸。"""
+    code6 = str(code).split(".")[0]
     try:
-        qs, singles, periods = three_line_qs(str(code).split(".")[0])
+        qs, singles, periods = three_line_qs(code6)
     except Exception as e:
         return False, None, None, "三线取数失败: %s" % str(e)[:80], None, "nodata"
-    passed, reason, latest, kind = gate_verdict(qs, singles)
+    fc = None
+    try:
+        pr = predicts(code6)
+        if pr:
+            fc = forecast_signal(periods, pr, date.today().isoformat())
+    except Exception:
+        fc = None
+    passed, reason, latest, kind = gate_verdict(qs, singles, forecast=fc)
     return passed, qs, singles, reason, latest, kind
 
 

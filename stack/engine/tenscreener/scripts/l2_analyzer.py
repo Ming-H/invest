@@ -37,9 +37,10 @@ def fetch_metrics(names, cli_path=DEFAULT_FINANCE_CLI, batch=6,
             " ".join(b) +
             f" {q_cn(*today_q)}单季归母净利润 单季扣非净利润"
             f" 归母净利润同比增长率 加权净资产收益率"
-            f" {q_cn(*annual)}经营活动产生的现金流量净额 {q_cn(*annual)}销售毛利率"
+            f" {q_cn(*annual)}归母净利润 {q_cn(*annual)}经营活动产生的现金流量净额"
+            f" {q_cn(*annual)}销售毛利率"
             f" {q_cn(*annual)}销售净利率 {q_cn(*annual)}基金持股占流通股比例"
-            " 最新市盈率ttm 市净率 流通市值 换手率 量比 近一年最高价前复权 最新价"
+            " 最新市盈率ttm 市净率 流通市值 近一年最高价前复权 最新价"
         )
         datas = iwencai(query, limit=len(b) + 4, cli_path=cli_path)
         for x in datas:
@@ -54,7 +55,8 @@ def fetch_metrics(names, cli_path=DEFAULT_FINANCE_CLI, batch=6,
                                        f"扣非归母净利润[{qd}]", "扣非归母净利润"),
                 "roe": _pick(x, f"加权净资产收益率[{qd}]", "加权净资产收益率",
                              f"净资产收益率[{qd}]", "净资产收益率"),
-                # 年度字段(最新完整年报)
+                # 年度字段(最新完整年报; 累计对累计, 修复超级现金流口径错配 2026-11-07)
+                "parent_profit_annual": _pick(x, f"归母净利润[{ad}]", "归母净利润["),
                 "op_cf": _pick(x, f"经营活动产生的现金流量净额[{ad}]",
                                "经营活动产生的现金流量净额"),
                 "gross_margin": _pick(x, f"销售毛利率[{ad}]", "销售毛利率"),
@@ -62,8 +64,6 @@ def fetch_metrics(names, cli_path=DEFAULT_FINANCE_CLI, batch=6,
                 "fund_hold": _pick(x, f"基金持股占流通股比例[{ad}]",
                                    "基金持股占流通股比例"),
                 # 行情/估值(时点值)
-                "turnover": _pick(x, "换手率"),
-                "volume_ratio": _pick(x, "量比"),
                 "pe": _pick(x, "最新市盈率ttm", "市盈率"),
                 "pb": _pick(x, "最新市净率", "市净率"),
                 "circ_mv": _pick(x, "流通市值", "最新a股流通市值"),
@@ -182,14 +182,16 @@ def score_jingshui(m, l1c):
     s["创一年新高/强势"] = 2 if (pos is not None and pos >= 0.95) else \
                           (1 if (pos is not None and pos >= 0.8) else 0)
 
-    # 超级现金流:经营现金流/归母净利(静水"5超级"之超级现金流;药明康德范例"现金流与利润匹配")
-    opcf, pp = m.get("op_cf"), m.get("parent_profit")
+    # 超级现金流:【年度累计】经营现金流/【年度累计】归母净利(静水"5超级"之超级现金流;
+    # 药明康德范例"现金流与利润匹配")。2026-11-07 修复口径错配: 旧代码年度现金流÷单季
+    # 归母, 正常公司恒≈4倍 → 恒满分, 指标判别力归零。
+    opcf, pp = m.get("op_cf"), m.get("parent_profit_annual")
     if opcf is not None and pp and pp > 0:
         ratio = opcf / pp
         s["超级现金流"] = 2 if ratio >= 1 else (1 if ratio >= 0.7 else 0)
     else:
         s["超级现金流"] = None
-        gaps.append("超级现金流(现金流或归母净利缺失)")
+        gaps.append("超级现金流(年度现金流或年度归母缺失)")
 
     # 扣非归母一致性(静水财报分析框架§一.2:背离时必须拆非经营性贡献,昭衍新药例)
     dv = q.get("divergence")

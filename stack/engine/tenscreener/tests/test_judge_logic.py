@@ -149,6 +149,56 @@ class TestStage1Gate(unittest.TestCase):
         ok, reason, latest, kind = judge.gate_verdict({"latest_period": None}, {})
         self.assertFalse(ok); self.assertEqual(kind, "nodata"); self.assertIsNone(latest)
 
+
+class TestStage1ForecastChannel(unittest.TestCase):
+    """预告爆发通道(2026-11-07 补全): 预告中枢倒推爆发且预告期晚于已披露期 → 豁免一切 reject。
+    实证锚点: 源杰(利润未兑现靠预告亮灯)/寒武纪(当季亏损+预告扭亏)/松发(Q1实绩+H1预告凑两线)。"""
+
+    FC = {"period": "2026Q4", "pass": True, "basis": "单季同比+538%", "single_yi": 2.5}
+
+    def test_loss_exempted_by_forecast(self):
+        """当季亏损但预告期晚且中枢爆发(寒武纪型) → 预告通道过闸。"""
+        qs = {"latest_period": "2026Q3", "rev_yoy": {"2026Q3": 55.0},
+              "parent_yoy": {}, "deduct_yoy": {}}
+        singles = {"2026Q3": (150e8, -3e8, None)}
+        ok, reason, latest, kind = judge.gate_verdict(qs, singles, forecast=self.FC)
+        self.assertTrue(ok); self.assertEqual(kind, "pass"); self.assertEqual(latest, "2026Q3")
+        self.assertIn("预告爆发通道", reason)
+
+    def test_under40_exempted_by_forecast(self):
+        """三线未全过40但 H1 预告倒推单季爆发(松发/源杰型) → 预告通道过闸。"""
+        qs = {"latest_period": "2026Q3", "rev_yoy": {"2026Q3": 55.0},
+              "parent_yoy": {"2026Q3": 30.0}, "deduct_yoy": {"2026Q3": 35.0}}
+        singles = {"2026Q3": (150e8, 20e8, 18e8)}
+        ok, reason, _, kind = judge.gate_verdict(qs, singles, forecast=self.FC)
+        self.assertTrue(ok); self.assertEqual(kind, "pass"); self.assertIn("预告爆发通道", reason)
+
+    def test_forecast_for_disclosed_period_ignored(self):
+        """预告期≤已披露期(实绩已出, 预告信号作废) → 不豁免, 维持 reject。"""
+        fc = dict(self.FC, period="2026Q3")
+        qs = {"latest_period": "2026Q3", "rev_yoy": {"2026Q3": 55.0},
+              "parent_yoy": {"2026Q3": 30.0}, "deduct_yoy": {"2026Q3": 35.0}}
+        singles = {"2026Q3": (150e8, 20e8, 18e8)}
+        ok, _, _, kind = judge.gate_verdict(qs, singles, forecast=fc)
+        self.assertFalse(ok); self.assertEqual(kind, "reject")
+
+    def test_forecast_not_pass_ignored(self):
+        """预告未达爆发口径 → 不豁免。"""
+        fc = {**self.FC, "pass": False, "basis": None}
+        qs = {"latest_period": "2026Q3", "rev_yoy": {"2026Q3": 55.0},
+              "parent_yoy": {"2026Q3": 30.0}, "deduct_yoy": {"2026Q3": 35.0}}
+        singles = {"2026Q3": (150e8, 20e8, 18e8)}
+        ok, _, _, _ = judge.gate_verdict(qs, singles, forecast=fc)
+        self.assertFalse(ok)
+
+    def test_normal_pass_unaffected(self):
+        """三线全过时 reason 仍为标准过闸(预告不干扰主通道)。"""
+        qs = {"latest_period": "2026Q3", "rev_yoy": {"2026Q3": 55.0},
+              "parent_yoy": {"2026Q3": 120.0}, "deduct_yoy": {"2026Q3": 98.0}}
+        singles = {"2026Q3": (150e8, 25e8, 22e8)}
+        ok, reason, _, _ = judge.gate_verdict(qs, singles, forecast=self.FC)
+        self.assertTrue(ok); self.assertIn("全>40%", reason)
+
     def test_quick_reject_card(self):
         """否决结论卡: 含4季表与依据, 供对话呈现(不落盘不发飞书)。"""
         qs = {"latest_period": "2026Q3", "rev_yoy": {"2026Q3": 8.0},

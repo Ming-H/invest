@@ -244,26 +244,38 @@ def forecast_signal(periods, predicts, asof, line=40.0, qoq_th=50.0):
     return res
 
 
+def _universe_report_dates(today=None):
+    """全市场粗筛报告期候选(主选, 次选)——只选【已全部披露完】的报告期,
+    防止按未披露完的 REPORTDATE 过滤时漏掉尚未披露的公司:
+      1-4月→上年三季报 | 5-6月→当年一季报 | 7-8月→中报披露窗口, 主选中报次选一季报
+      | 9-10月→当年中报 | 11-12月→当年三季报(2026-11-07 修复: 旧逻辑 month>=7 一律
+      用中报, Q4 整整落后一季; 且"fallback 一季报"注释从未实现, candidates[1] 是死代码)。"""
+    from datetime import date as _d
+    today = today or _d.today()
+    y, m = today.year, today.month
+    if m >= 11:
+        return [f"{y}-09-30", f"{y}-06-30"]
+    if m >= 9:
+        return [f"{y}-06-30", f"{y}-09-30"]     # 9-10月: 三季报在披露窗口, 主选已齐的中报
+    if m >= 7:
+        return [f"{y}-06-30", f"{y}-03-31"]     # 7-8月: 中报陆续披露, 主选中报(排序表只含已披露)
+    if m >= 5:
+        return [f"{y}-03-31", f"{y - 1}-12-31"]
+    return [f"{y - 1}-09-30", f"{y - 1}-06-30"]
+
+
 def growth_universe(pass_line=40.0, pages=4, report_date=None):
     """全市场成长股粗筛(免额度):RPT_LICO_FN_CPD 按营收同比(YSTZ)/归母同比(SJLTZ)
     各取前 pages×100,保留双线>pass_line 的并集。问财耗尽日的 runner Step1 替代。
-    报告期:默认自动(中报季用最新已披露期,fallback 一季报)。
+    报告期:默认按披露日历自动选(见 _universe_report_dates);主选无数据时真正落一档。
     返回 [{code,name,rev_growth,profit_growth,report_date}]。"""
     from datetime import date as _d
-    if report_date is None:
-        today = _d.today()
-        candidates = []
-        y = today.year
-        if today.month >= 7:
-            candidates += [f"{y}-06-30", f"{y}-03-31"]
-        else:
-            candidates += [f"{y}-03-31", f"{y-1}-12-31"]
-        report_date = candidates[0]
+    dates = [report_date] if report_date else _universe_report_dates()
 
-    def _fetch(sort_col, page):
+    def _fetch(sort_col, page, rd):
         cf = os.path.join(_cache_dir or os.path.join(
             EM_CACHE_ROOT, _d.today().strftime("%Y%m%d")),
-            f"univ_{sort_col}_p{page}_{report_date}.json")
+            f"univ_{sort_col}_p{page}_{rd}.json")
         os.makedirs(os.path.dirname(cf), exist_ok=True)
         if os.path.exists(cf):
             try:
@@ -274,7 +286,7 @@ def growth_universe(pass_line=40.0, pages=4, report_date=None):
         url = ("https://datacenter-web.eastmoney.com/api/data/v1/get"
                f"?reportName=RPT_LICO_FN_CPD&columns=ALL&pageSize=100&pageNumber={page}"
                f"&sortColumns={sort_col}&sortTypes=-1"
-               f"&filter=(REPORTDATE%3D%27{report_date}%27)")
+               f"&filter=(REPORTDATE%3D%27{rd}%27)")
         req = urllib.request.Request(url, headers={
             "User-Agent": "Mozilla/5.0", "Referer": "https://data.eastmoney.com/"})
         d = json.load(urllib.request.urlopen(req, timeout=30))
@@ -283,16 +295,22 @@ def growth_universe(pass_line=40.0, pages=4, report_date=None):
         _counter["api"] += 1
         return rows
 
-    out = {}
-    for sort_col in ("YSTZ", "SJLTZ"):
-        for page in range(1, pages + 1):
-            for r in _fetch(sort_col, page):
-                code = r.get("SECURITY_CODE")
-                rev, prof = r.get("YSTZ"), r.get("SJLTZ")
-                if not code or rev is None or prof is None:
-                    continue
-                if rev > pass_line and prof > pass_line and code not in out:
-                    out[code] = {"code": code, "name": r.get("SECURITY_NAME_ABBR"),
-                                 "rev_growth": rev, "profit_growth": prof,
-                                 "report_date": report_date}
-    return list(out.values())
+    for rd in dates:
+        out = {}
+        any_row = False
+        for sort_col in ("YSTZ", "SJLTZ"):
+            for page in range(1, pages + 1):
+                rows = _fetch(sort_col, page, rd)
+                any_row = any_row or bool(rows)
+                for r in rows:
+                    code = r.get("SECURITY_CODE")
+                    rev, prof = r.get("YSTZ"), r.get("SJLTZ")
+                    if not code or rev is None or prof is None:
+                        continue
+                    if rev > pass_line and prof > pass_line and code not in out:
+                        out[code] = {"code": code, "name": r.get("SECURITY_NAME_ABBR"),
+                                     "rev_growth": rev, "profit_growth": prof,
+                                     "report_date": rd}
+        if any_row:
+            return list(out.values())
+    return []

@@ -13,9 +13,11 @@ class TestKeyRegression(unittest.TestCase):
     """回归:历史 bug —— L1 输出 profit_growth/rev_growth,L2 曾读 *_2025 永远 0 分。"""
 
     def setUp(self):
+        # op_cf 与 parent_profit_annual 均为年度累计口径(2026-11-07 修复)
         self.m = {"roe": 20.0, "gross_margin": 60.0, "pos_1y": 0.97,
                   "circ_mv": 80e8, "fund_hold": 5.0, "op_cf": 2.0e8,
-                  "parent_profit": 1.5e8, "deduct_profit": 1.4e8}
+                  "parent_profit_annual": 1.5e8,
+                  "parent_profit": 0.4e8, "deduct_profit": 0.38e8}
         self.gate = {"verdict": "on", "method": "ma250", "index_gain_1y": 5.0}
         self.l1c = {"profit_growth": 68.1, "rev_growth": 54.6,
                     "price_history": {"gain_1yr": 25.0}}
@@ -56,11 +58,22 @@ class TestKeyRegression(unittest.TestCase):
         self.assertEqual(s2["创一年新高/强势"], 1)
 
     def test_jingshui_cashflow(self):
-        s, _ = score_jingshui(self.m, self.l1c)        # 2.0/1.5 = 1.33 ≥1 → 2分
+        s, _ = score_jingshui(self.m, self.l1c)        # 年度CF 2.0 / 年度归母 1.5 = 1.33 ≥1 → 2分
         self.assertEqual(s["超级现金流"], 2)
         m2 = {**self.m, "op_cf": 0.9e8}                # 0.6 → 0分
         s2, _ = score_jingshui(m2, self.l1c)
         self.assertEqual(s2["超级现金流"], 0)
+
+    def test_jingshui_cashflow_ignores_single_quarter_profit(self):
+        """口径回归(2026-11-07): 比率只认年度累计归母, 不再误用单季归母。"""
+        m = {**self.m, "op_cf": 2.0e8, "parent_profit_annual": 1.8e8,
+             "parent_profit": 0.4e8}                   # 单季0.4亿(旧bug下 2.0/0.4=5 恒满分)
+        s, _ = score_jingshui(m, self.l1c)             # 正确口径 2.0/1.8≈1.1 → 2分(而非靠错配)
+        self.assertEqual(s["超级现金流"], 2)
+        m2 = {**self.m, "op_cf": 1.3e8, "parent_profit_annual": 1.8e8,
+              "parent_profit": 0.4e8}                  # 0.72 → 1分(旧口径 3.25 → 虚高2分)
+        s2, _ = score_jingshui(m2, self.l1c)
+        self.assertEqual(s2["超级现金流"], 1)
 
     def test_divergence_gap_recorded(self):
         l1c = {**self.l1c, "quarterly": {
@@ -97,8 +110,10 @@ class TestDynamicPeriods(unittest.TestCase):
             q = captured["query"]
             # 8月底日历保守语义:H1 至 8/31 才完整 → 最新季取一季报
             self.assertIn("2026年一季报单季归母净利润", q)
+            self.assertIn("2025年年报归母净利润", q)
             self.assertIn("2025年年报经营活动产生的现金流量净额", q)
             self.assertIn("近一年最高价前复权", q)
+            self.assertNotIn("换手率", q)               # 冗余字段已删(2026-11-07)
             self.assertEqual(m["若羽臣"]["report_period_used"], "20260331")
             self.assertEqual(m["若羽臣"]["annual_period_used"], "20251231")
         finally:
