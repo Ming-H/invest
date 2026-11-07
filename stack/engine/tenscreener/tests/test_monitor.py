@@ -5,6 +5,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "scripts"))
 from monitor import confirm_check, exit_check, market_gate
+import sector
 import watchlist as wl
 
 # 若羽臣真实三线(同 test_quarters)
@@ -170,3 +171,32 @@ class TestWatchlistStateMachine(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDiscoveryDials(unittest.TestCase):
+    """v5 发现度三表盘(2026-11-07): 纯函数, 资金/机构/筹码 → 相位。"""
+
+    def test_left_gold_undiscovered(self):
+        """行业β好但资金未发现+机构未覆盖+股价低位 = 左侧黄金。"""
+        d = sector.discovery_dials(
+            board_info={"rank": 30, "pct": 0.5},
+            research_meta={"orgs": 3},
+            holders_meta={"holders_wan": [("2026-09-30", 3.0), ("2025-09-30", 3.1),
+                                          ("2024-09-30", 3.2), ("2023-09-30", 3.3)]},
+            pos_1y=0.55)
+        self.assertEqual(d["dials"]["资金"], 0)
+        self.assertEqual(d["phase"], "未发现(左侧黄金)")
+
+    def test_crowded(self):
+        """板块榜首+研报覆盖饱和 = 拥挤(风险相位)。"""
+        d = sector.discovery_dials(
+            board_info={"rank": 2, "pct": 5.0},
+            research_meta={"orgs": 25},
+            holders_meta={"holders_wan": [("2026-09-30", 2.0), ("2025-09-30", 2.4)]},
+            pos_1y=0.98)
+        self.assertEqual(d["phase"], "拥挤")
+
+    def test_discovering_middle(self):
+        d = sector.discovery_dials(
+            board_info={"rank": 10}, research_meta={"orgs": 10}, holders_meta={}, pos_1y=0.9)
+        self.assertEqual(d["phase"], "发现中")
