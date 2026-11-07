@@ -250,6 +250,24 @@ def _sec_rows(report, code, sort="REPORT_DATE", extra_filter=None):
         return []
 
 
+def _web_rows(report, code, sort="END_DATE"):
+    """datacenter-web 根域取数(2026-11-08): securities 子域对重组股(松发型)的
+    FREEHOLDERS 覆盖不全返回空, web 根域同表多期齐全(实测松发4期)。失败返回 []。"""
+    p = {"reportName": report, "columns": "ALL", "pageSize": 40, "pageNumber": 1,
+         "sortColumns": sort, "sortTypes": -1,
+         "filter": '(SECUCODE="%s")' % _secu(code)}
+    u = "https://datacenter-web.eastmoney.com/api/data/v1/get?" + urllib.parse.urlencode(p)
+    try:
+        req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0",
+                                                 "Referer": "https://data.eastmoney.com/"})
+        d = json.loads(urllib.request.urlopen(req, timeout=15).read().decode())
+        time.sleep(0.12)
+        return (d.get("result") or {}).get("data") or []
+    except Exception as e:
+        degrade("_web_rows", "%s %s" % (report, str(e)[:60]))
+        return []
+
+
 def _f(v, div=None):
     if v is None:
         return None
@@ -877,8 +895,11 @@ def build_pack(code, outdir, with_pdf=True, pdf_dir=None):
     qt, qlabels = qoq_table(singles)
     qual = quality_rows(code6)
     bal = balance_leads(code6)
-    em_sd, em_gd = emweb_holders(code6)                        # emweb 源(2026-11-08)
-    hold = holders_shift(code6, freeholder_rows=em_sd, gdrs_rows=em_gd)
+    em_sd, em_gd = emweb_holders(code6)                        # emweb: 户数/集中度(名单仅最新一期)
+    fh_rows = _web_rows("RPT_F10_EH_FREEHOLDERS", code6)       # web根域: 多期名单(两期diff用)
+    if not fh_rows:
+        fh_rows = em_sd                                       # 兜底: emweb 最新一期
+    hold = holders_shift(code6, freeholder_rows=fh_rows, gdrs_rows=em_gd)
     comp = main_composition(code6, thick_labels)
     m, recent_closes = price_metrics(code6)
     gate = market_gate_free()
@@ -935,7 +956,7 @@ def build_pack(code, outdir, with_pdf=True, pdf_dir=None):
     guidance = trend.extract_guidance(texts, jyps_list)
     gv = trend.guidance_verdict(guidance, "收入") or {}
     gv2 = trend.guidance_verdict(guidance, "净利") or {}
-    holders_tl = trend.holders_timeline(em_sd)
+    holders_tl = trend.holders_timeline(fh_rows)
     kw = trend.keyword_matrix(texts, jyps_list)
     leads = trend.leads_verdict(bal, inc, cf, qs.get("periods") or [])
     card = trend.scorecard(gv, kw, holders_tl, leads, ana)
