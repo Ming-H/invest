@@ -111,7 +111,9 @@ judge --code 603259
    含 **pdf_summary**(2026-11-05 新增): 精读第七节两厚报告章节, 每份厚报告总结一段
    (景气措辞/经营要点增量/募投节奏/风险/非经常) + **『跨期对比』两厚对读找变化趋势**
    (什么表述新出现/消失、景气定调升降、募投节奏快慢、风险条目增减——与第八节 C表述漂移互证)
-3. `python3 scripts/cli.py judge --code 603259 --publish` —— **条件发布(Stage4)**:
+3. `python3 scripts/cli.py judge --code 603259 --publish` —— **条件发布(Stage4)**
+   (文档命名**严格固定**: `{名称}({代码})十倍股判定 {YYYY-MM-DD}`, 如「松发股份(603268)十倍股判定 2026-11-07」;
+   落点=飞书「十倍股判定」文件夹, judge_folder 已持久化, 勿改格式):
    - `is_tenbagger_candidate=true` → 校验+组装+**发布飞书全量文档**并清理本地
      (仅留 feishu_url.txt; 不保留 report.md)
    - `is_tenbagger_candidate=false` → 对话返回判定结论, 清理全部产物, 不发飞书不落盘
