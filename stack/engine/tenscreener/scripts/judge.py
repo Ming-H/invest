@@ -896,6 +896,7 @@ def build_pack(code, outdir, with_pdf=True, pdf_dir=None):
     except Exception as e:
         degrade("v5_sector", str(e)[:60])
     disc = sector.discovery_dials(board, cons, hold, pos_1y=(m or {}).get("pos_1y"))
+    pev = policy_evidence(ind_name, ind_concepts)
     ind_profile = _industry_profile_path(ind_name)
     try:
         orgrow = (_sec_rows("RPT_F10_BASIC_ORGINFO", code6, sort=None) or [{}])[0]
@@ -925,6 +926,7 @@ def build_pack(code, outdir, with_pdf=True, pdf_dir=None):
                          "fundamentals": fund, "members_n": members_n,
                          "profile": ind_profile},
             "discovery": disc,
+            "policy_evidence": pev,
             "background": background,
             "trend": {"guidance": guidance, "guidance_rev": gv, "guidance_np": gv2,
                       "holders_tl": holders_tl, "keywords": kw, "leads": leads,
@@ -943,6 +945,80 @@ def build_pack(code, outdir, with_pdf=True, pdf_dir=None):
 def _tbl(headers, rows):
     return ["| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)] + \
            ["| " + " | ".join(str(c) if c is not None else "—" for c in r) + " |" for r in rows]
+
+
+def _strip_em(x):
+    return re.sub(r"<[^>]+>", "", str(x or ""))
+
+
+def policy_evidence(industry, concepts):
+    """Q1 政策侧双通道素材(v5.1, 2026-11-08, 用户定版'用接口固定'):
+      ① gov.cn 政策文件库官方接口(sousuo.www.gov.cn/search-gov/data)——中央政策
+        原文, 标题/全文检索, 带文号+日期, 免费无额度; 全文搜主线词+标题搜行业词
+      ② 华尔街见闻搜索 API(wallstreetcn-news skill 同源)——政策快讯/产业事件
+    -> {"gov": [{title, date, pcode, url}], "news": [{title, date, query}]}
+    当日缓存; 任一通道失败降级不阻塞。"""
+    import hashlib as _h
+    from datetime import datetime as _dt
+
+    def _cached_fetch(key, fetch):
+        d = os.path.join(os.path.dirname(HERE), "outputs", "cache", "policy",
+                         date.today().strftime("%Y%m%d"))
+        cf = os.path.join(d, "%s.json" % key)
+        if os.path.exists(cf):
+            try:
+                return json.load(open(cf, encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+        rows = fetch()
+        if rows is not None:
+            try:
+                os.makedirs(d, exist_ok=True)
+                json.dump(rows, open(cf, "w", encoding="utf-8"), ensure_ascii=False)
+            except OSError:
+                pass
+        return rows or []
+
+    def _gov(field, q, n=5):
+        def fetch():
+            import urllib.parse as _up
+            u = ("https://sousuo.www.gov.cn/search-gov/data?t=zhengcelibrary_gw&q="
+                 + _up.quote(q) + "&timetype=timeqb&sort=pubtime&sortType=1"
+                 + "&searchfield=" + field + "&p=1&n=%d" % n)
+            req = urllib.request.Request(u, headers={
+                "User-Agent": "Mozilla/5.0", "Referer": "https://sousuo.www.gov.cn/"})
+            d = json.loads(urllib.request.urlopen(req, timeout=12).read().decode())
+            return [{"title": _strip_em(it.get("title")),
+                     "date": it.get("pubtimeStr"),
+                     "pcode": it.get("pcode"),
+                     "url": it.get("url") or it.get("piclinksurl")}
+                    for it in ((d.get("searchVO") or {}).get("listVO") or [])]
+        k = _h.md5(("gov|%s|%s|%s" % (field, q, n)).encode()).hexdigest()[:16]
+        return _cached_fetch(k, fetch)
+
+    def _wscn(q, n=8):
+        def fetch():
+            u = ("https://api-one-wscn.awtmt.com/apiv1/search/article?query="
+                 + urllib.parse.quote(q) + "&limit=%d" % n)
+            d = _http_json(u, referer="https://wallstreetcn.com/", timeout=12)
+            return [{"title": _strip_em(it.get("title")), "date": _dt.fromtimestamp(
+                        it.get("display_time") or 0).strftime("%Y-%m-%d")}
+                    for it in ((d.get("data") or {}).get("items") or []) if it.get("title")]
+        k = _h.md5(("wscn|%s|%s" % (q, n)).encode()).hexdigest()[:16]
+        return _cached_fetch(k, fetch)
+
+    gov, news = [], []
+    c0 = (concepts or "").split(",")[0].strip() if concepts else None
+    try:
+        gov = _gov("title", c0 or industry, 5)
+        gov += _gov("content", "%s 十五五" % (c0 or industry), 4)
+    except Exception as e:
+        degrade("policy_evidence.gov", str(e)[:50])
+    try:
+        news = _wscn(c0 or industry, 8)
+    except Exception as e:
+        degrade("policy_evidence.news", str(e)[:50])
+    return {"gov": gov[:9], "news": news[:8]}
 
 
 def _industry_profile_path(ind_name):
@@ -1110,6 +1186,20 @@ def _render_pack_md(pack, texts):
         else:
             L += ["", "(无匹配行业档案 —— Q2 行业β判定按公开信息现场检索核验, 证据带出处)"]
         L.append("")
+    pev = p.get("policy_evidence") or {}
+    gov_rows, news_rows = pev.get("gov") or [], pev.get("news") or []
+    if gov_rows or news_rows:
+        L += ["## 五D、政策与产业信息(双通道接口, 固定来源)", ""]
+        if gov_rows:
+            L += ["**① 中央政策文件(中国政府网政策文件库官方接口, 带文号)**:", ""]
+            L += ["- %s | %s | %s" % (g.get("date"), g.get("title", "")[:52], g.get("pcode") or "")
+                  for g in gov_rows]
+            L.append("")
+        if news_rows:
+            L += ["**② 政策快讯/产业新闻(华尔街见闻搜索接口)**:", ""]
+            L += ["- %s | %s" % (n.get("date"), n.get("title", "")[:56]) for n in news_rows]
+        L += ["", "提炼规则: Q1 政策侧证据优先引①(权威原文+文号), 事件类引②; "
+                  "每条带日期; 部委级规划若①未覆盖, 判定时 WebSearch 定向补(如『工信部 {行业} 十五五』)。", ""]
     disc = p.get("discovery") or {}
     if disc:
         L += ["## 四B、发现度表盘(Q4: 是不是时候)", "",
