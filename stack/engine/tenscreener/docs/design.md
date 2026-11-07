@@ -1,12 +1,16 @@
 # tenscreener 设计文档
 
-> 十倍股单标的分级判定引擎:融合 CAN SLIM + 静水。v4.1(2026-11-05)起主路径为 judge 四级流水(硬闸→深读→三典判定→条件发布);三级漏斗为辅助发现通道。
+> 十倍股单标的分级判定引擎:融合 CAN SLIM + 静水。v4.2(2026-11-07)主路径为 judge 四级流水(三通道硬闸→深读→三典判定→条件发布);三级漏斗为辅助发现通道;watch/track 全免费源零问财。
 
 ## 1. 目标与北极星(v4.1 用户定稿, 2026-11-05)
 
 **判定一只给定标的:是不是"业务体量能增长 10 倍"的超级成长股、处于哪个阶段。**
 只做逐只判定,只给结论与信号;不产出名单、不荐股。收敛到 1-2 只、买哪只,永远是投资人的纪律(静水核心)——工具不越位。
 judge 主路径按**判定成本分级**:三线数据(免费秒级)先闸门,贵数据(财报 PDF/研报)只砸过闸者。
+**Stage1 三条过闸通道**(v4.2, 2026-11-07 补全预告通道):①三线可算侧同比全>40%且不亏损
+②扭亏通道(归母≥0.5亿)③预告爆发通道(emoney.forecast_signal 中枢倒推爆发且预告期晚于
+已披露期)——v4.1 只有两通道时,框架自家案例 源杰#4/寒武纪#5/松发#7 会被秒否,
+与"最早捕获"的设计目标自相矛盾。预告通道=允许深读,买入判定仍归 Stage3 三典(5不买把关)。
 
 ## 2. 三级漏斗
 
@@ -53,16 +57,25 @@ TPS = 0.30·F1行业空间 + 0.20·F2终点可达 + 0.15·F3市值衰减
 ## 7. 文件结构
 
 ```
-scripts/wencai.py        问财封装:当日缓存/API计数/离线回放哨兵
+scripts/wencai.py        问财封装:当日缓存/API计数/离线回放哨兵(支持 TENSCREENER_SKILLS_DIR)
+scripts/kline.py         腾讯前复权日K:分段合并/缓存/pos_1y/回撤/大盘gate序列
+scripts/emoney.py        东财免额度:F10三线(f10_periods/cum_singles/yoy_from_periods/
+                         three_line_qs)/业绩预告(predicts/forecast_signal)/全市场粗筛
+                         (growth_universe, 报告期按披露日历自动选)
 scripts/quarters.py      报告期日历 + 三线单季同比序列 + 纯函数分析
-scripts/monitor.py       market_gate/price_position/confirm_check/exit_check
-scripts/watchlist.py     状态文件 + 状态机
+scripts/monitor.py       大盘β(问财版+免费MA250版)/price_position(问财版+腾讯K线免费版)/
+                         confirm_check(R1-R4)/exit_check(E1-E3)/set_asof(回放冻结)
+scripts/watchlist.py     状态文件 + 状态机(含 confirmed→scouted 人工降级边)
 scripts/scorer.py        TPS 七因子评分(纯标准库)
-scripts/l1_screener.py   问财初筛 + 排雷 + 三线序列排序加权
-scripts/l2_analyzer.py   深度体检(CAN SLIM×静水打分,报告期动态)
-scripts/l3_evaluator.py  TPS 评估 + Markdown 报告(含三线四季表)
-scripts/cli.py           统一入口(screen/l1/l2/l3/watch/track)
-tests/                   56 用例 + 若羽臣四时点 fixtures 回放
+scripts/judge.py         v4.2 判定引擎:Stage1 三通道硬闸/免费源素材包(九类关注)/
+                         verdict校验/报告组装/条件发布(飞书)
+scripts/trend.py         跨期趋势信号引擎:指引漂移/股东身份/表述漂移/先行斜率/记分卡
+scripts/runner.py        右侧趋势中继:五阶段分类(并发K线动量验证)/backtest 回放
+scripts/l1_screener.py   问财初筛(左侧错杀)+ 排雷 + 三线序列排序加权
+scripts/l2_analyzer.py   深度体检(CAN SLIM×静水打分,报告期动态, 累计口径现金流)
+scripts/l3_evaluator.py  TPS 评估 + Markdown 报告(含三线四季表, PEG 年度增速优先)
+scripts/cli.py           统一入口(screen/l1/l2/l3/watch/track/runner/judge)
+tests/                   125 用例 + 若羽臣四时点 fixtures 回放(问财+emoney+kline 三源)
 references/              canslim / jingshui / tenbaggers / lifecycle 清单
 outputs/                 cache/ · 报告归档 · watchlist.json(gitignore)
 ```
@@ -82,7 +95,7 @@ outputs/                 cache/ · 报告归档 · watchlist.json(gitignore)
 - **scout 找"财报已看见、股价还没看见";watch 等"股价也看见了"**——正是静水"看见>分析"的两段式落地
 - **exit_signal 是告警不是指令**;建仓/清仓永远人工(不荐股)
 - peak 维护:历史峰值/现价/近一年最高三者取大(漏跑期间创新高也不丢)
-- watch/track 单次运行 ≈5 次查询(10 只:指数 1 + 三线 2 + 价格 2,当日缓存复用)
+- watch/track 单次运行 0 次问财(2026-11-07 起:三线走F10+价格走腾讯K线+大盘走MA250, 全免费源)
 - 出处映射与"量化近似"参数清单见 `references/lifecycle.md`
 ## 9. runner 右侧趋势中继(2026-08-30 新增:上涨期间识别)
 
