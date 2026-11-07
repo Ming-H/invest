@@ -505,12 +505,31 @@ def cashflow_leads(code, n=4):
     return out
 
 
-def holders_shift(code, freeholder_rows=None):
+def emweb_holders(code):
+    """emweb F10 股东研究(2026-11-08 换源): RPT_F10_EH_FREEHOLDERS 对重组股(松发型)
+    覆盖不全, emweb ShareholderResearch 全覆盖——十大流通股东(sdltgd)+股东户数(gdrs)。
+    -> (sdltgd_rows, gdrs_rows); 失败返回 ([], [])。"""
+    pre = ("SH" if str(code)[0] in "69" else ("BJ" if str(code)[0] in "48" else "SZ"))
+    try:
+        d = _http_json("https://emweb.securities.eastmoney.com/PC_HSF10/ShareholderResearch/PageAjax?code="
+                       + pre + str(code).split(".")[0],
+                       referer="https://emweb.securities.eastmoney.com/", timeout=15)
+        time.sleep(0.12)
+        return d.get("sdltgd") or [], d.get("gdrs") or []
+    except Exception as e:
+        degrade("emweb_holders", str(e)[:60])
+        return [], []
+
+
+def holders_shift(code, freeholder_rows=None, gdrs_rows=None):
     """十大流通股东最新两期 diff(新进/退出/增减) + 股东户数近5期趋势。
-    freeholder_rows 可注入(build_pack 已取过则复用, 防同一接口重复请求)。"""
-    fh = (freeholder_rows or _sec_rows("RPT_F10_EH_FREEHOLDERS", code))[:12]
+    数据源=emweb ShareholderResearch(2026-11-08 起); rows 可注入(复用已取数据)。"""
+    fh = list(freeholder_rows) if freeholder_rows is not None else None
+    if fh is None:
+        fh, gd = emweb_holders(code)
+        gdrs_rows = gd
     by_end = {}
-    for r in fh:
+    for r in fh[:24]:
         by_end.setdefault((r.get("END_DATE") or "")[:10], []).append(r)
     ends = sorted(by_end, reverse=True)[:2]
     diff = None
@@ -528,9 +547,11 @@ def holders_shift(code, freeholder_rows=None):
                     if abs(chg) >= 15:
                         diff["change"].append("%s %+.0f%%" % (nm[:16], chg))
         diff["exit"] = [nm for nm in prev if nm not in cur]
-    hn = _sec_rows("RPT_F10_EH_HOLDERNUM", code)[:6]
-    trend = [( (r.get("END_DATE") or "")[:10], _f(r.get("HOLDER_TOTAL_NUM"), 1e4)) for r in hn]
-    return {"top10_diff": diff, "holders_wan": trend[:5]}
+    trend = [((r.get("END_DATE") or "")[:10], _f(r.get("HOLDER_TOTAL_NUM"), 1e4))
+             for r in (gdrs_rows or []) if r.get("HOLDER_TOTAL_NUM")][:5]
+    focus = next((r.get("HOLD_FOCUS") for r in (gdrs_rows or [])
+                  if r.get("END_DATE") and r.get("HOLD_FOCUS")), None)
+    return {"top10_diff": diff, "holders_wan": trend, "holders_focus": focus}
 
 
 def main_composition(code, thick_labels):
@@ -856,8 +877,8 @@ def build_pack(code, outdir, with_pdf=True, pdf_dir=None):
     qt, qlabels = qoq_table(singles)
     qual = quality_rows(code6)
     bal = balance_leads(code6)
-    fh_rows = _sec_rows("RPT_F10_EH_FREEHOLDERS", code6)[:30]   # 取一次, 两处共用
-    hold = holders_shift(code6, freeholder_rows=fh_rows)
+    em_sd, em_gd = emweb_holders(code6)                        # emweb 源(2026-11-08)
+    hold = holders_shift(code6, freeholder_rows=em_sd, gdrs_rows=em_gd)
     comp = main_composition(code6, thick_labels)
     m, recent_closes = price_metrics(code6)
     gate = market_gate_free()
@@ -914,7 +935,7 @@ def build_pack(code, outdir, with_pdf=True, pdf_dir=None):
     guidance = trend.extract_guidance(texts, jyps_list)
     gv = trend.guidance_verdict(guidance, "收入") or {}
     gv2 = trend.guidance_verdict(guidance, "净利") or {}
-    holders_tl = trend.holders_timeline(fh_rows)
+    holders_tl = trend.holders_timeline(em_sd)
     kw = trend.keyword_matrix(texts, jyps_list)
     leads = trend.leads_verdict(bal, inc, cf, qs.get("periods") or [])
     card = trend.scorecard(gv, kw, holders_tl, leads, ana)
@@ -1393,7 +1414,7 @@ def render_report(pack, verdict, errs):
     """v5.2 版式(2026-11-08 用户定版): 中文序号六章/删头部meta块/删记分卡表
     (先行数据已在『财报阅读』小节)/pdf_summary 含『股东与机构变化』小节。"""
     p = pack
-    L = ["# %s(%s) 十倍股判定报告" % (p.get("name"), p.get("code")), ""]
+    L = []          # 文档标题由飞书命名承载, 正文不再重复 H1(2026-11-08 用户定版)
     cand = "是" if verdict.get("is_tenbagger_candidate") else "否"
     L += ["## 一、结论", "",
           "- **是否十倍股候选: %s**(置信 %s)" % (cand, verdict.get("confidence")),

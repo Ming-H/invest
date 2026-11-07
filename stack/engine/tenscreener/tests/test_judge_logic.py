@@ -257,7 +257,7 @@ class TestVerdict(unittest.TestCase):
              "jingshui_5no": [{"no": 1, "item": "n", "verdict": "否"}],
              "canslim": {k: "✓" for k in ("C", "A", "N", "S", "L", "I", "M")}}
         md = judge.render_report(pack, v, [])
-        for kw in ("十倍股判定报告", "是否十倍股候选: 是", "所处阶段: 主升期", "静水核心因子"):
+        for kw in ("是否十倍股候选: 是", "所处阶段: 主升期", "静水核心因子"):
             self.assertIn(kw, md)
 
     def test_render_report_contains_quarterly_table(self):
