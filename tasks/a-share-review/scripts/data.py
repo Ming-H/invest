@@ -670,3 +670,100 @@ def fundamentals_threeline(codes):
                                     "归属于母公司股东的净利润同比增长率"),
                      "ded_yoy": _yoy("扣非净利润同比增长率")}
     return out
+
+
+# ---------------- 买方画像(v3.2, 2026-11-12): 大单结构/龙虎榜/大宗, 全免费源 ----------------
+
+DC_WEB = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+DC_HDR = {"User-Agent": "Mozilla/5.0", "Referer": "https://data.eastmoney.com/"}
+
+
+def stock_fflow_breakdown(code, days=6):
+    """近N日大单结构净额(单位:万元): 主力=超大+大, 超大单/大单/中单/小单。
+    东财 push2 资金流K线(免费)。失败返回[](画像降级, 不阻塞)。"""
+    url = ("https://push2.eastmoney.com/api/qt/stock/fflow/kline/get?secid=%s&klt=101"
+           "&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56&lmt=%d"
+           % (_secid(code), days))
+    try:
+        d = (_get(url, timeout=10) or {}).get("data") or {}
+        out = []
+        for k in (d.get("klines") or [])[-days:]:
+            f = k.split(",")
+            if len(f) < 6:
+                continue
+            try:
+                out.append({"date": f[0][:10],
+                            "main": round(float(f[1]) / 1e4, 0),   # 万元
+                            "small": round(float(f[2]) / 1e4, 0),
+                            "mid": round(float(f[3]) / 1e4, 0),
+                            "large": round(float(f[4]) / 1e4, 0),
+                            "xl": round(float(f[5]) / 1e4, 0)})
+            except ValueError:
+                continue
+        return out
+    except Exception:
+        return []
+
+
+def lhb_records(code, days=30):
+    """近N日龙虎榜上榜记录(东财 datacenter, 免费)。[{date, reason, chg_pct}] 失败返回[]。"""
+    c = str(code).split(".")[0]
+    url = (DC_WEB + "?reportName=RPT_DAILYBILLBOARD_DETAILSNEW"
+           "&filter=(SECURITY_CODE%3D%22" + c + "%22)"
+           "&columns=TRADE_DATE,EXPLANATION,CHANGE_RATE&pageSize=10&sortColumns=TRADE_DATE&sortTypes=-1")
+    try:
+        d = (_get(url, headers=DC_HDR) or {}).get("result") or {}
+        cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+        out = []
+        for r in (d.get("data") or []):
+            dt = str(r.get("TRADE_DATE") or "")[:10]
+            if dt >= cutoff:
+                out.append({"date": dt, "reason": (r.get("EXPLANATION") or "").strip(),
+                            "chg_pct": r.get("CHANGE_RATE")})
+        return out
+    except Exception:
+        return []
+
+
+def lhb_seats(code, date):
+    """某日龙虎榜买卖前五席位(单位:万元)。{"buy":[{seat,amt_wan}], "sell":[...]} 无记录返回{}。"""
+    c = str(code).split(".")[0]
+    out = {}
+    for rpt, side, col in (("RPT_BILLBOARD_DAILYDETAILSBUY", "buy", "BUY"),
+                           ("RPT_BILLBOARD_DAILYDETAILSSELL", "sell", "SELL")):
+        url = (DC_WEB + "?reportName=" + rpt + "&filter=(SECURITY_CODE%3D%22" + c
+               + "%22)(TRADE_DATE%3D%27" + date + "%27)"
+               "&columns=ALL&pageSize=6&sortColumns=" + col + "&sortTypes=-1")
+        try:
+            rows = ((_get(url, headers=DC_HDR) or {}).get("result") or {}).get("data") or []
+            out[side] = [{"seat": (r.get("OPERATEDEPT_NAME") or "").strip(),
+                          "amt_wan": round((r.get(col) or 0) / 1e4)} for r in rows[:5]]
+        except Exception:
+            out[side] = []
+    return out if (out.get("buy") or out.get("sell")) else {}
+
+
+def block_trades(code, days=30):
+    """近N日大宗交易(东财 datacenter, 免费)。[{date, price, vol_wan, amt_yi, buyer, seller}]
+    失败返回[]。amt 由 价格×数量 计算(接口金额字段口径不稳)。"""
+    c = str(code).split(".")[0]
+    url = (DC_WEB + "?reportName=RPT_DATA_BLOCKTRADE&filter=(SECURITY_CODE%3D%22" + c
+           + "%22)&columns=ALL&pageSize=10&sortColumns=TRADE_DATE&sortTypes=-1")
+    try:
+        rows = ((_get(url, headers=DC_HDR) or {}).get("result") or {}).get("data") or []
+        cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+        out = []
+        for r in rows:
+            dt = str(r.get("TRADE_DATE") or "")[:10]
+            if dt < cutoff:
+                continue
+            price, vol = r.get("DEAL_PRICE"), r.get("DEAL_VOLUME")
+            if not (price and vol):
+                continue
+            out.append({"date": dt, "price": price, "vol_wan": round(vol / 1e4, 2),
+                        "amt_yi": round(price * vol / 1e8, 2),
+                        "buyer": (r.get("BUYER_NAME") or "").strip(),
+                        "seller": (r.get("SELLER_NAME") or "").strip()})
+        return out
+    except Exception:
+        return []

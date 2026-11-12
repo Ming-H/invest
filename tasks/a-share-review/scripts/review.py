@@ -39,6 +39,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import data  # noqa: E402
 import charts  # noqa: E402
+import profile  # noqa: E402  (v3.2 买方画像: 大单结构+席位打标)
 
 WATCHLIST = os.path.join(ROOT, "watchlist.json")
 OUTROOT = os.path.join(ROOT, "outputs")
@@ -517,6 +518,15 @@ def build(args):
             except Exception:
                 mf60 = []
                 pass
+        # 买方画像(v3.2, 2026-11-12): 大单结构+席位打标, 确定性渲染, 失败降级不阻塞
+        try:
+            plines, psm = profile.profile_lines(code, q.get("name") or "")
+            if plines:
+                lines += plines
+            if psm:
+                wl_snap[code]["profile"] = psm
+        except Exception:
+            degraded.append("买方画像:%s" % code)
         try:
             n60 = min(60, len(k))
             fig_no += 1
