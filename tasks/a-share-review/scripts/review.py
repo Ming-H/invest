@@ -445,6 +445,25 @@ def build(args):
             lines.append("财报三线(最新报告期): 营收%s%% 归母%s%% 扣非%s%% %s%s" % (
                 fmt(vals[0], "%.0f"), fmt(vals[1], "%.0f"), fmt(vals[2], "%.0f"),
                 "/".join(flags), e1))
+        # 合同负债(v3.3, 2026-11-14): 订单先行指标, 预收款模式公司才有意义;
+        # 连续2季环比净增萎缩才亮⚠(单季承压多因交付旺季消耗, 非订单退潮)
+        cl_sm = None
+        try:
+            cl = data.contract_liab(code, 4)
+            if cl and (cl[0].get("cl_yi") or 0) >= 0.5:   # 余额≈0 视为非预收模式, 不渲染
+                ds = [r for r in cl if r.get("d_yi") is not None]
+                seq_txt = "→".join("%.1f" % r["cl_yi"] for r in reversed(cl))
+                d_txt = "｜".join("%+.1f亿" % r["d_yi"] for r in reversed(ds)) if ds else ""
+                warn = (" ⚠新签退潮预警" if len(ds) >= 2 and all(r["d_yi"] < 0 for r in ds[:2])
+                        else "")
+                lines.append("合同负债(订单先行): %s亿(近%d季 %s)%s%s" % (
+                    cl[0]["cl_yi"], len(cl), seq_txt,
+                    ("｜环比 " + d_txt) if d_txt else "", warn))
+                cl_sm = {"date": cl[0]["date"], "cl_yi": cl[0]["cl_yi"],
+                         "deltas": [{"date": r["date"], "d_yi": r["d_yi"]} for r in ds],
+                         "warn": bool(warn)}
+        except Exception:
+            degraded.append("合同负债:%s" % code)
         # 事件区: 解禁 + 披露
         unl = data.unlock_calendar(code, 90)
         if unl:
@@ -466,6 +485,8 @@ def build(args):
             lines += ["相关新闻：" + "；".join("%s" % n["title"][:30] for n in news[:3])]
         lines.append("")
         wl_snap[code] = {"price": q.get("price"), "main_inflow_wan": q.get("main_inflow_wan"), "trig": trig}
+        if cl_sm:
+            wl_snap[code]["contract_liab"] = cl_sm
         mf60 = []
         # 持仓组专属: 近N日主力资金流序列 + 吸筹/出逃形态标注(2026-11-03新增)
         if cost:

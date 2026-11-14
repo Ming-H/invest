@@ -767,3 +767,36 @@ def block_trades(code, days=30):
         return out
     except Exception:
         return []
+
+
+def contract_liab(code, periods=4):
+    """合同负债序列(东财 F10 资产负债表, 免费不耗问财)。v3.3(2026-11-14)新增。
+
+    订单先行指标(预收款模式公司: 造船/军工/地产/装修/部分设备): 签单即收首付,
+    余额先涨、1.5-3年后转收入; 环比净增连续萎缩 = 新签退潮的最早警报(领先收入
+    拐点 1-2 年)。注意交付旺季余额天然承压(确认收入消耗大), 跨期对比须剔季节性
+    (松发 2025Q4 仅+5.5% 即交付冲刺所致, 非订单退潮)。
+
+    → [{"date","cl_yi","d_yi","pct"}] 最新在前, 共 periods 期; 失败/无数据返回 []。
+    非预收模式公司余额≈0, 调用方自行决定是否展示。"""
+    c = str(code).split(".")[0]
+    url = (DC_WEB + "?reportName=RPT_F10_FINANCE_GBALANCE"
+           "&filter=(SECUCODE%3D%22" + c + (".SH%22)" if c.startswith(("6", "9")) else ".SZ%22)")
+           + "&columns=SECUCODE,REPORT_DATE,CONTRACT_LIAB&pageSize=10"
+           "&sortColumns=REPORT_DATE&sortTypes=-1")
+    try:
+        rows = ((_get(url, headers=DC_HDR) or {}).get("result") or {}).get("data") or []
+        seq = [(str(r.get("REPORT_DATE") or "")[:10], r.get("CONTRACT_LIAB"))
+               for r in rows if r.get("CONTRACT_LIAB") is not None]
+        seq.sort(key=lambda x: x[0], reverse=True)
+        out = []
+        for i, (dt, v) in enumerate(seq[:periods]):
+            d_yi = pct = None
+            if i + 1 < len(seq) and seq[i + 1][1]:
+                d_yi = round((v - seq[i + 1][1]) / 1e8, 2)
+                pct = round((v / seq[i + 1][1] - 1) * 100, 1)
+            out.append({"date": dt, "cl_yi": round(v / 1e8, 2), "d_yi": d_yi, "pct": pct})
+        return out
+    except Exception:
+        return []
+

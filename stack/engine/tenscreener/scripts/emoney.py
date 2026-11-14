@@ -6,6 +6,9 @@
   f10_periods(code)     F10 主要指标(按报告期累计三线 + NOTICE_DATE 披露日,全历史)
   predicts(code)        业绩预告(RPT_PUBLIC_OP_NEWPREDICT):归母净利润区间/类型/披露日
   forecast_signal(...)  预告中枢倒推单季 → 同比/环比/扭亏判定(静水"预告类取中枢倒推单季")
+  contract_liab(code)   合同负债序列(RPT_F10_FINANCE_GBALANCE, 2026-11-14)——静水手法四
+                       「订单验证」的可机检代理: 预收款模式公司签单即收首付, 余额先涨
+                       →1.5-3年后转收入; 环比净增连续萎缩 = 新签退潮最早警报
 
 出处:静水财报分析框架§一.1 —— "预告类:取中枢测算;倒推最新单季环比/同比,判断利润
 释放节奏"(松发股份例:H1 预告+Q1 实绩 → 倒推 Q2 单季归母环比+129%、同比+538%)。
@@ -152,6 +155,37 @@ def three_line_qs(code):
         qs["deduct_yoy"][lbl] = d
     qs["latest_period"] = qs["periods"][-1] if qs["periods"] else None
     return qs, singles, periods
+
+
+# ─── 合同负债(订单先行指标, 2026-11-14) ──────────────────────
+
+def contract_liab(code, periods=5):
+    """合同负债序列(RPT_F10_FINANCE_GBALANCE, 免费) → [{label, cl_yi, d_yi, pct}] 最新在前。
+
+    静水财报框架手法四「订单验证(前瞻判据 > 当期利润)」的可机检代理:
+    预收款模式公司(造船/军工/地产/装修等)签单即收首付, 余额先涨、1.5-3 年后
+    转收入; 环比净增连续萎缩 = 新签订单退潮的最早警报(领先收入拐点 1-2 年)。
+    注意交付旺季余额天然承压(确认收入消耗大), 评分规则须容忍单季回落。
+    非预收模式公司余额≈0, 由调用方(l2_analyzer)跳过不评。"""
+    rows = _get("RPT_F10_FINANCE_GBALANCE", code)
+    seq = []
+    for r in rows:
+        rd = (r.get("REPORT_DATE") or "")[:10]
+        v = r.get("CONTRACT_LIAB")
+        if rd and v is not None:
+            y, m = int(rd[:4]), int(rd[5:7])
+            q = Q_BY_MONTH.get(m)
+            if q:
+                seq.append((f"{y}Q{q}", v))
+    seq.sort(key=lambda x: x[0], reverse=True)
+    out = []
+    for i, (lbl, v) in enumerate(seq[:periods]):
+        d_yi = pct = None
+        if i + 1 < len(seq) and seq[i + 1][1]:
+            d_yi = round((v - seq[i + 1][1]) / 1e8, 2)
+            pct = round((v / seq[i + 1][1] - 1) * 100, 1)
+        out.append({"label": lbl, "cl_yi": round(v / 1e8, 2), "d_yi": d_yi, "pct": pct})
+    return out
 
 
 # ─── 业绩预告 ───────────────────────────────────────────────

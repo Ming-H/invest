@@ -20,6 +20,7 @@ from l1_screener import _get_by_period, _parse_range_gains
 from quarters import (latest_report_period, latest_annual_period,
                       q_cn, q_enddate, divergence, PASS_LINE)
 from monitor import market_gate, fetch_index_snapshot
+import emoney
 
 
 def fetch_metrics(names, cli_path=DEFAULT_FINANCE_CLI, batch=6,
@@ -208,8 +209,32 @@ def score_jingshui(m, l1c):
 
     s["新品"] = None
     gaps.append("新品/新市场(定性)")
-    s["供不应求"] = None
-    gaps.append("供求信号(需财报:合同负债/产能/订单)")
+
+    # 供求信号(2026-11-14): 合同负债环比 = 静水手法四「订单验证(前瞻判据>当期利润)」
+    # 的可机检代理(预收款模式公司签单即收首付, 余额先涨→1.5-3年后转收入)。
+    # 趋势口径(容忍交付季单季消耗, 如船舶2026Q2 -25亿/Q3 +115亿是健康补回):
+    #   2 = 最新季净增 且 近3季净增季数≥2(订单验证强);
+    #   1 = 最新季净增 但 近3季净增季数<2(刚转正);
+    #   0 = 最新季净减(连续2季负才亮⚠退潮预警——单季负多因交付旺季消耗, 如松发2025Q4);
+    #   None = 余额<0.5亿或数据缺失(非预收模式), 交 Claude 读财报补产能/订单。
+    cl = m.get("contract_liab") or []
+    ds = [r["d_yi"] for r in cl if r.get("d_yi") is not None] if cl else []
+    if cl and ds and (cl[0].get("cl_yi") or 0) >= 0.5:
+        up_n = sum(1 for d in ds[:3] if d > 0)
+        if ds and ds[0] > 0 and up_n >= 2:
+            s["供不应求"] = 2
+        elif ds and ds[0] > 0:
+            s["供不应求"] = 1
+        else:
+            s["供不应求"] = 0
+            seq_txt = "/".join("%+.1f" % d for d in ds[:3]) if ds else "?"
+            if len(ds) >= 2 and ds[0] < 0 and ds[1] < 0:
+                gaps.append(f"合同负债连续2季净减({seq_txt}亿)⚠新签订单退潮预警, 需核对手订单/在手合同")
+            else:
+                gaps.append(f"合同负债最新季净减({seq_txt}亿), 或为交付旺季消耗, 下季回检")
+    else:
+        s["供不应求"] = None
+        gaps.append("供求信号(非预收模式或环比数据不足, 需财报:产能/订单)")
     return s, gaps
 
 
@@ -225,6 +250,14 @@ def analyze(l1_candidates, cli_path=DEFAULT_FINANCE_CLI,
     for c in l1_candidates:
         nm = c.get("name")
         m = metrics.get(nm, {})
+        # 合同负债注入(东财免费源, 2026-11-14): 失败静默降级 → score_jingshui 按缺失处理
+        if c.get("code"):
+            try:
+                cl = emoney.contract_liab(c["code"], 5)
+                if cl:
+                    m["contract_liab"] = cl
+            except Exception:
+                pass
         cscores, cgaps = score_canslim(m, c, gate=gate)
         jscores, jgaps = score_jingshui(m, c)
         cvals = [v for v in cscores.values() if isinstance(v, (int, float))]
