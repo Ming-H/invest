@@ -800,3 +800,121 @@ def contract_liab(code, periods=4):
     except Exception:
         return []
 
+
+
+# ---------------- 模块1.4: 财报高增榜(单季归母>40% × 披露后涨幅, v3.4 2026-11-16) ----------------
+# 每日1次问财筛「最新报告期单季归母同比>40%且≥1亿」(候选=单季归母Top100),
+# 基准价=披露日当日收盘(前复权, ≤披露日的最后一根), 现价=批量行情; 按披露后涨幅排Top20。
+# 基准价按报告期缓存 cache/earnings_momentum.json, 次日起仅刷行情; 同日重跑幂等。
+
+EMOM_CACHE = os.path.join(SKILL_DIR, "cache", "earnings_momentum.json")
+
+
+def latest_report_period(today=None):
+    """季节自适应: 最近一个已披露完毕的报告期 → (问财表述, 报告期标签)。
+    11-1月→本年三季报; 2-4月→上年年报; 5-7月→本年一季报; 8-10月→本年中报。"""
+    t = today or datetime.date.today()
+    y, m = t.year, t.month
+    if m >= 11:
+        return ("%d年三季报" % y, "%dQ3" % y)
+    if m <= 1:
+        return ("%d年三季报" % (y - 1), "%dQ3" % (y - 1))
+    if m <= 4:
+        return ("%d年年报" % (y - 1), "%dFY" % (y - 1))
+    if m <= 7:
+        return ("%d年一季报" % y, "%dQ1" % y)
+    return ("%d年中报" % y, "%dQ2" % y)
+
+
+def _norm_ymd(s):
+    """问财公告日期"20261031" → "2026-10-31"; 异常返回 None。"""
+    s = str(s).replace("-", "").replace("/", "")[:8]
+    return "%s-%s-%s" % (s[:4], s[4:6], s[6:8]) if len(s) == 8 and s.isdigit() else None
+
+
+def earnings_high_growth_screen(period_label, limit=100):
+    """问财筛选(每日1次, 占额度): 单季归母同比>40% 且单季归母≥1亿, 按单季归母降序。
+    → [{code, name, np_yi, yoy_pct, disc_date}] 或 []。"""
+    q = ("%s单季归母净利润同比增长率大于40%%且单季归母净利润大于1亿元"
+         "且%s披露日期在2020年1月1日至2030年12月31日之间的股票,"
+         "按单季归母净利润从高到低排序" % (period_label, period_label))
+    out = []
+    for r in _wencai(q, limit):
+        name = _pick(r, "股票简称")
+        if not name or "ST" in name.upper() or name.startswith("退"):   # ST/退市警示出局(对齐earnings-reader闸门)
+            continue
+        dd = _norm_ymd(_pick(r, "公告日期["))
+        try:
+            out.append({"code": str(_pick(r, "股票代码") or "").split(".")[0],
+                        "name": name,
+                        "np_yi": round(float(_pick(r, "单季度_归母净利润[")) / 1e8, 1),
+                        "yoy_pct": round(float(_pick(r, "单季度_归母净利润同比增长率[")), 1),
+                        "disc_date": dd})
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _disc_base_close(code, disc_date):
+    """披露日基准收盘: K线(前复权)中 ≤披露日 的最后一根。失败返回 None。"""
+    base = None
+    try:
+        for row in stock_kline(code, days=60):
+            if row["date"] <= disc_date:
+                base = row["close"]
+    except Exception:
+        return None
+    return base
+
+
+def earnings_momentum(n=20, cand_limit=100):
+    """财报高增Top20 主入口。
+    → ({period_label, period, updated, rows:[{code,name,np_yi,yoy_pct,disc_date,
+        base,price,chg_pct,streak}]}, err_or_None)。问财空返回时 rows=[] + err。"""
+    label, period = latest_report_period()
+    cands = earnings_high_growth_screen(label, cand_limit)
+    if not cands:
+        return {"period_label": label, "period": period,
+                "rows": []}, "问财筛选无返回"
+    cache = {}
+    try:
+        cache = json.load(open(EMOM_CACHE))
+    except Exception:
+        pass
+    if cache.get("period") != period:          # 报告期滚动 → 缓存重建(基准价/连榜清零)
+        cache = {"period": period, "base": {}, "streak": {}, "updated": None}
+    quotes = stock_quotes_batch([c["code"] for c in cands])
+    rows = []
+    for c in cands:
+        if not c["disc_date"]:
+            continue
+        b = cache["base"].get(c["code"])
+        if not b:
+            b = _disc_base_close(c["code"], c["disc_date"])
+            if b:
+                cache["base"][c["code"]] = b
+        price = (quotes.get(c["code"]) or {}).get("price")
+        if not b or not price:
+            continue
+        rows.append(dict(c, base=round(b, 2), price=price,
+                         chg_pct=round((price / b - 1) * 100, 1)))
+    rows.sort(key=lambda x: -x["chg_pct"])
+    top = rows[:n]
+    today_str = datetime.date.today().isoformat()
+    if cache.get("updated") != today_str:       # 连榜计数: 一日一涨, 同日重跑幂等
+        today_codes = {t["code"] for t in top}
+        for code in list(cache["streak"]):
+            if code not in today_codes:
+                cache["streak"][code] = 0
+        for t in top:
+            cache["streak"][t["code"]] = cache["streak"].get(t["code"], 0) + 1
+        cache["updated"] = today_str
+        try:
+            os.makedirs(os.path.dirname(EMOM_CACHE), exist_ok=True)
+            json.dump(cache, open(EMOM_CACHE, "w"), ensure_ascii=False)
+        except Exception:
+            pass
+    for t in top:
+        t["streak"] = cache["streak"].get(t["code"], 1)
+    return {"period_label": label, "period": period,
+            "updated": today_str, "rows": top}, None

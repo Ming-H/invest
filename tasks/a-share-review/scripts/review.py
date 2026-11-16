@@ -385,6 +385,27 @@ def build(args):
         degraded.append("图3")
     lines += ["⟦CLAUDE: 今日主线一句话——先读同目录 notes_for_claude.md 素材包(昨日vs今日资金/连板/量能对比), 再结合上方数据写1-2句：主线是延续/切换/新起⟧", ""]
 
+    # ===== 1.4 财报高增Top20(v3.4 2026-11-16: 单季归母>40% × 披露后涨幅) =====
+    emom, emom_err = None, None
+    try:
+        emom, emom_err = data.earnings_momentum(20)
+    except Exception as ex:
+        emom_err = str(ex)[:30]
+    lines += ["### 1.4 财报高增Top20（单季归母>40% × 披露后涨幅）", ""]
+    if emom and emom["rows"]:
+        lines += ["> 口径: %s单季归母同比>40%%且≥1亿, 候选=单季归母Top100, 按「披露日收盘→最新收盘」涨幅排序(前复权, 基准价缓存)" % emom["period_label"], "",
+                  "| 标的 | 单季归母 | 单季同比 | 披露日 | 披露后涨幅 | 连续在榜 |",
+                  "|---|---:|---:|---|---:|---:|"]
+        for t in emom["rows"]:
+            lines.append("| %s(%s) | %s亿 | +%.0f%% | %s | **%+.1f%%** | %d天 |" % (
+                t["name"], t["code"], t["np_yi"], t["yoy_pct"], t["disc_date"],
+                t["chg_pct"], t["streak"]))
+        lines += [""]
+    else:
+        emom_msg = emom_err or "无数据"
+        lines += ["(财报高增榜未获取: %s)" % emom_msg, ""]
+        degraded.append("财报高增榜(%s)" % emom_msg[:24])
+
     # ===== 二、关注标的(全息卡; v3: 公告归板块三, 此处不再列) =====
     wl = load_watchlist()
     lines += ["## 二、关注标的（全息卡）", ""]
@@ -614,6 +635,9 @@ def build(args):
             "flows": {"inflow": fl["inflow"], "outflow": fl["outflow"]},
             "lianban": [{"name": x["name"], "days": x["days"]} for x in lb],
             "gainers_top5": [{"name": g["name"], "pct": g["pct"]} for g in gainers[:5]],
+            "earnings_momentum": [{"name": t["name"], "code": t["code"], "chg_pct": t["chg_pct"],
+                                   "yoy_pct": t["yoy_pct"], "np_yi": t["np_yi"]}
+                                  for t in (emom or {}).get("rows", [])[:10]],
             "watchlist": wl_snap,
             "degraded": degraded}
     # 幂等: 同日重跑先剔除旧今日行(时间序列一日一行)
