@@ -515,9 +515,10 @@ def _cninfo_orgids():
 
 def announcements_recent(code, days=7, limit=6):
     """巨潮公告(日期区间版): [{title, date, pdf_url}]。
-    正确姿势(2026-11-05 实测): column 按市场(sse/bjse/szse) + stock="代码,orgId"。"""
-    end = datetime.date.today()
-    start = end - datetime.timedelta(days=days)
+    正确姿势(2026-11-05 实测): column 按市场(sse/bjse/szse) + stock="代码,orgId"。
+    v3.5.1: 窗口右端扩到明天——晚间披露的公告巨潮标记为次日日期, 当晚复盘就要看到。"""
+    end = datetime.date.today() + datetime.timedelta(days=1)
+    start = datetime.date.today() - datetime.timedelta(days=days)
     c = str(code).split(".")[0]
     column = "bjse" if c.startswith(("92", "43", "83", "87", "88")) else ("sse" if c.startswith(("6", "9")) else "szse")
     org = _cninfo_orgids().get(c)

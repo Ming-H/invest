@@ -101,6 +101,12 @@ def announcement_radar(stocks, outdir, days=2):
         n_new += len(new)
         cost = s.get("cost")
         L.append("- **%s(%s)**（%s, %d 条新公告）：" % (name, code, "持仓" if cost else "观察", len(new)))
+        _today = datetime.date.today().isoformat()
+
+        def _dtxt(a):
+            # v3.5.1: 巨潮晚间披露标记次日 → 显式标"⚑明日", 当晚即纳入解读
+            return "%s⚑明日" % a["date"][5:] if a.get("date", "") > _today else a["date"][5:]
+
         for a in new:
             # 判定: 命中关键关键词 -> 解读(标题同时含 摘要/更正/补充 的降级为程序性); 其余只列
             is_key = any(k in a["title"] for k in ANN_KEY) and not any(
@@ -113,12 +119,12 @@ def announcement_radar(stocks, outdir, days=2):
                     L.append("  - 《%s》(%s) ⟦CLAUDE: 公告解读——读同目录 ann_texts.md 对应段, "
                              "结合该股(%s%s), 3行内答: ①说了什么(数字/条款) ②改变了什么(结合该股状态) "
                              "③该盯什么; 无实质信息就一句话带过⟧"
-                             % (a["title"][:44], a["date"][5:], "持仓成本%s" % cost if cost else "观察组",
+                             % (a["title"][:44], _dtxt(a), "持仓成本%s" % cost if cost else "观察组",
                                 (" 触发位" + str(s.get("trig"))) if s.get("trig") else ""))
                 else:
-                    L.append("  - 《%s》(%s) ⚠PDF下载失败(链接见巨潮)" % (a["title"][:44], a["date"][5:]))
+                    L.append("  - 《%s》(%s) ⚠PDF下载失败(链接见巨潮)" % (a["title"][:44], _dtxt(a)))
             else:
-                L.append("  - 《%s》(%s) — 程序性" % (a["title"][:44], a["date"][5:]))
+                L.append("  - 《%s》(%s) — 程序性" % (a["title"][:44], _dtxt(a)))
         L.append("")
     if n_new == 0:
         L.append("近%d日重点标的无新公告。" % days)
