@@ -88,8 +88,11 @@ check(r["rows"][0]["code"] == "601919" and approx(r["rows"][0]["chg_pct"], 10.0)
 check(r["rows"][1]["chg_pct"] == -10.0, "负涨幅在后")
 check(r["rows"][0]["streak"] == 1 and r["rows"][1]["streak"] == 1, "首日连榜=1")
 
-r2, _ = data.earnings_momentum(n=2)              # 同日重跑 → 幂等
+calls = [0]
+data._disc_base_close = lambda code, dd: (calls.__setitem__(0, calls[0] + 1), KL.get(code))[1]
+r2, _ = data.earnings_momentum(n=2)              # 同日重跑 → 幂等且基准价已缓存
 check(r2["rows"][0]["streak"] == 1, "同日重跑连榜不重复累计(幂等)")
+check(calls[0] == 0, "同日重跑不重拉K线(基准价已落盘)")
 
 cache = json.load(open(data.EMOM_CACHE))
 cache["updated"] = "2026-11-15"                   # 伪装成昨天, 模拟次日重跑

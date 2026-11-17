@@ -909,11 +909,11 @@ def earnings_momentum(n=20, cand_limit=100):
         for t in top:
             cache["streak"][t["code"]] = cache["streak"].get(t["code"], 0) + 1
         cache["updated"] = today_str
-        try:
-            os.makedirs(os.path.dirname(EMOM_CACHE), exist_ok=True)
-            json.dump(cache, open(EMOM_CACHE, "w"), ensure_ascii=False)
-        except Exception:
-            pass
+    try:                                        # 落盘始终执行: 同日重跑也要持久化新拉的基准价
+        os.makedirs(os.path.dirname(EMOM_CACHE), exist_ok=True)
+        json.dump(cache, open(EMOM_CACHE, "w"), ensure_ascii=False)
+    except Exception:
+        pass
     for t in top:
         t["streak"] = cache["streak"].get(t["code"], 1)
     return {"period_label": label, "period": period,
