@@ -809,6 +809,27 @@ def contract_liab(code, periods=4):
 
 EMOM_CACHE = os.path.join(SKILL_DIR, "cache", "earnings_momentum.json")
 
+TENSCREENER_TRIAGE = os.path.join(SKILL_DIR, "..", "tenscreener", "scripts", "triage.py")
+
+
+def tenscreener_triage(codes, names=None):
+    """批量十倍股分诊(tenscreener triage, 腾讯K线+东财F10 全免费)。→ {code: row} 或 None(降级)。
+    v3.5(2026-11-17): 生命周期硬判(用户规则: 已涨≥5x+回撤≥30%+反弹<90%前高=已兑现否决)
+    + Stage1三线闸门 → A趋势候选/B左侧回调/C闸门未过/done已兑现。"""
+    if not codes or not os.path.exists(TENSCREENER_TRIAGE):
+        return None
+    args = ["python3", TENSCREENER_TRIAGE, "--codes", ",".join(codes), "--json"]
+    if names:
+        args += ["--names", ",".join(str(names.get(c) or "") for c in codes)]
+    try:
+        out = subprocess.check_output(args, timeout=420,
+                                      stderr=subprocess.DEVNULL).decode("utf-8", "ignore")
+        m = re.search(r"\[.*\]", out, re.S)
+        rows = json.loads(m.group(0)) if m else []
+        return {r.get("code"): r for r in rows if r.get("code")}
+    except Exception:
+        return None
+
 
 def latest_report_period(today=None):
     """季节自适应: 最近一个已披露完毕的报告期 → (问财表述, 报告期标签)。

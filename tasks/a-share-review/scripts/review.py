@@ -72,13 +72,17 @@ def announcement_radar(stocks, outdir, days=2):
     渲染 ⟦CLAUDE⟧ 解读占位 + PDF 文本落 ann_texts.md(素材包, 不进正稿)。
     seen 按 pdf_url 跨日去重(outputs/ann_seen.json), 同一公告只解读一次。
     -> (section_lines, 新公告数, 带PDF数)。"""
+    # v3.5: seen 落盘改为"发布时合并"(outdir/ann_pending.json), 草稿运行不再永久烧掉公告;
+    # 同日本目录 pending 也计入已见(幂等), 全局账本只在 publish 成功后更新
     seen_fp = os.path.join(OUTROOT, "ann_seen.json")
+    pend_fp = os.path.join(outdir, "ann_pending.json")
     seen = {}
-    if os.path.exists(seen_fp):
-        try:
-            seen = json.load(open(seen_fp, encoding="utf-8"))
-        except Exception:
-            seen = {}
+    for fp in (seen_fp, pend_fp):
+        if os.path.exists(fp):
+            try:
+                seen.update(json.load(open(fp, encoding="utf-8")))
+            except Exception:
+                pass
     L = ["## 三、公告解读（关注标的 %d 只 · 巨潮）" % len(stocks),
          "> 窗口: 近%d日新公告 | 关键公告带解读, 程序性只列 | 同一公告跨日只解读一次" % days, ""]
     texts, n_new, n_pdf = [], 0, 0
@@ -124,7 +128,7 @@ def announcement_radar(stocks, outdir, days=2):
         open(os.path.join(outdir, "ann_texts.md"), "w", encoding="utf-8").write(
             "# 公告原文素材(解读用, 不进正稿)\n\n" + "\n\n---\n\n".join(texts) + "\n")
     try:
-        json.dump(seen, open(seen_fp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        json.dump(seen, open(pend_fp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     except Exception:
         pass
     return L, n_new, n_pdf
@@ -391,15 +395,37 @@ def build(args):
         emom, emom_err = data.earnings_momentum(20)
     except Exception as ex:
         emom_err = str(ex)[:30]
-    lines += ["### 1.4 财报高增Top20（单季归母>40% × 披露后涨幅）", ""]
+    lines += ["### 1.4 财报高增Top20（单季归母>40% × 披露后涨幅 × 十倍股分诊）", ""]
+    tri = None
+    if emom and emom["rows"]:
+        tri = data.tenscreener_triage([t["code"] for t in emom["rows"]],
+                                      {t["code"]: t["name"] for t in emom["rows"]})
+        if not tri:
+            degraded.append("十倍股分诊(tenscreener)")
+    _zh = {"uptrend": "趋势", "pullback": "回调", "left": "左侧"}
+
+    def _tri_cell(code):
+        r = (tri or {}).get(code)
+        if not r:
+            return "—"
+        g, st = r.get("grade"), r.get("state")
+        if g == "done":
+            return "**❌已兑现·走完%.1fx**" % (r.get("multiple") or 0)
+        if g in ("A", "B"):
+            return "**%s·%s%.0f%%**" % (g, _zh.get(st, st), 100 - (r.get("near_high_ratio") or 100))
+        if g == "C":
+            return "C·闸门未过"
+        return "—"
+
     if emom and emom["rows"]:
         lines += ["> 口径: %s单季归母同比>40%%且≥1亿, 候选=单季归母Top100, 按「披露日收盘→最新收盘」涨幅排序(前复权, 基准价缓存)" % emom["period_label"], "",
-                  "| 标的 | 单季归母 | 单季同比 | 披露日 | 披露后涨幅 | 连续在榜 |",
-                  "|---|---:|---:|---|---:|---:|"]
+                  "> 十倍股分诊(v3.5): tenscreener生命周期硬判——已涨≥5倍+回撤≥30%+反弹未过前高9折=**已兑现非候选**; A=趋势候选过闸 B=左侧/回调过闸 C=闸门未过", "",
+                  "| 标的 | 单季归母 | 单季同比 | 披露日 | 披露后涨幅 | 连续在榜 | 十倍股分诊 |",
+                  "|---|---:|---:|---|---:|---:|---|"]
         for t in emom["rows"]:
-            lines.append("| %s(%s) | %s亿 | +%.0f%% | %s | **%+.1f%%** | %d天 |" % (
+            lines.append("| %s(%s) | %s亿 | +%.0f%% | %s | **%+.1f%%** | %d天 | %s |" % (
                 t["name"], t["code"], t["np_yi"], t["yoy_pct"], t["disc_date"],
-                t["chg_pct"], t["streak"]))
+                t["chg_pct"], t["streak"], _tri_cell(t["code"])))
         lines += [""]
     else:
         emom_msg = emom_err or "无数据"
@@ -586,7 +612,14 @@ def build(args):
 
     # ===== 三、公告解读(原四B雷达, v3 升级独立板块; 异常不阻塞复盘) =====
     try:
-        radar_lines, ann_new, ann_pdf = announcement_radar(wl, outdir)
+        _radar_days = 2
+        if prev and prev.get("date"):
+            try:
+                _radar_days = max(2, (datetime.date.today()
+                                      - datetime.date.fromisoformat(prev["date"])).days)
+            except Exception:
+                pass
+        radar_lines, ann_new, ann_pdf = announcement_radar(wl, outdir, days=_radar_days)
         lines += radar_lines
         print("[radar] 新公告%d条, 带PDF解读%d条" % (ann_new, ann_pdf), flush=True)
     except Exception as ex:
@@ -636,7 +669,8 @@ def build(args):
             "lianban": [{"name": x["name"], "days": x["days"]} for x in lb],
             "gainers_top5": [{"name": g["name"], "pct": g["pct"]} for g in gainers[:5]],
             "earnings_momentum": [{"name": t["name"], "code": t["code"], "chg_pct": t["chg_pct"],
-                                   "yoy_pct": t["yoy_pct"], "np_yi": t["np_yi"]}
+                                   "yoy_pct": t["yoy_pct"], "np_yi": t["np_yi"],
+                                   "tri": ((tri or {}).get(t["code"]) or {}).get("grade")}
                                   for t in (emom or {}).get("rows", [])[:10]],
             "watchlist": wl_snap,
             "degraded": degraded}
@@ -854,6 +888,23 @@ def publish(md_path, trade_date):
         raise RuntimeError("创建文档失败: " + out[:300])
     doc = m.group(1)
     url = "https://my.feishu.cn/docx/" + doc
+    # v3.5: 发布成功路径上, 把本日 pending 公告并入全局 seen(草稿永不烧公告)
+    _pend = os.path.join(outdir, "ann_pending.json")
+    if os.path.exists(_pend):
+        _seen_fp = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(md_path))),
+                                "ann_seen.json")
+        _seen = {}
+        if os.path.exists(_seen_fp):
+            try:
+                _seen = json.load(open(_seen_fp, encoding="utf-8"))
+            except Exception:
+                _seen = {}
+        try:
+            _seen.update(json.load(open(_pend, encoding="utf-8")))
+            json.dump(_seen, open(_seen_fp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+            os.remove(_pend)
+        except Exception:
+            pass
     md = open(md_path).read()
     segs = md_to_xml_segments(md, img_by_anchor)
     ok_img = total_img = 0
