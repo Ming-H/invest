@@ -1,0 +1,7 @@
+{
+  "_说明": "通用行业高频指标注册表(配置驱动, 代码不绑任何具体行业)。复制为 indicators.json 后自定义——后者已 gitignore, 属个人订阅层。provider 两种: ①eastmoney_index=东财全球指数接口日频自动取数(secid 到东财行情页查); ②manual=手动维护(月度指标如造船三大指标/社零, 每月更新 value/date/chg_pct 字段)。freq 渲染为发布频率标注。",
+  "indicators": [
+    {"name": "BDI 波罗的海干散货指数", "provider": "eastmoney_index", "secid": "100.BDI", "freq": "daily", "note": "干散货运价"},
+    {"name": "示例·月度指标(手动维护)", "provider": "manual", "freq": "monthly", "value": null, "chg_pct": null, "date": "", "note": "如造船新接订单/社零——每月填 value 与 date 后自动展示"}
+  ]
+}

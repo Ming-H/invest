@@ -63,7 +63,9 @@ ANN_KEY = ("业绩预告", "业绩快报", "预增", "预减", "预亏", "扭亏
            "回购", "增持", "减持", "质押", "解除质押", "停牌", "复牌", "立案", "问询",
            "监管", "警示", "辞职", "离职", "聘任", "定增", "向特定对象发行", "配股",
            "可转债", "分红", "派息", "股权激励", "收购", "出售", "转让", "投资协议",
-           "战略合作", "重大事项", "停产", "事故", "诉讼", "仲裁", "冻结", "业绩修正")
+           "战略合作", "重大事项", "停产", "事故", "诉讼", "仲裁", "冻结", "业绩修正",
+           # v3.6 通用渠道扩展: 调研纪要与说明会从"程序性"升级为关键公告(下PDF解读)
+           "投资者关系活动记录", "业绩说明会", "路演")
 ANN_PDF_CAP = 6   # 单日最多下 PDF 解读的公告数(防素材包爆炸)
 
 
@@ -438,6 +440,25 @@ def build(args):
         lines += ["(财报高增榜未获取: %s)" % emom_msg, ""]
         degraded.append("财报高增榜(%s)" % emom_msg[:24])
 
+    # ===== 1.5 行业高频指标(v3.6: 通用指标注册表, 配置驱动不绑个人持仓) =====
+    try:
+        inds = data.industry_indicators()
+    except Exception:
+        inds = []
+        degraded.append("行业高频指标")
+    if inds:
+        _frq = {"daily": "日更", "weekly": "周更", "monthly": "月更"}
+        lines += ["### 1.5 行业高频指标（注册表驱动）", "",
+                  "| 指标 | 最新值 | 涨跌 | 频率 | 备注 |", "|---|---:|---:|---|---|"]
+        for it in inds:
+            v = it["value"]
+            lines.append("| %s | %s | %s | %s | %s |" % (
+                it["name"],
+                "{:,.2f}".format(v) if isinstance(v, (int, float)) else str(v or "—"),
+                ("%+.2f%%" % it["chg_pct"]) if it["chg_pct"] is not None else "—",
+                _frq.get(it["freq"], it["freq"]), it.get("note") or ""))
+        lines.append("")
+
     # ===== 二、关注标的(全息卡; v3: 公告归板块三, 此处不再列) =====
     wl = load_watchlist()
     lines += ["## 二、关注标的（全息卡）", ""]
@@ -536,6 +557,15 @@ def build(args):
         news = data.stock_news(q.get("name") or "", 3)
         if news:
             lines += ["相关新闻：" + "；".join("%s" % n["title"][:30] for n in news[:3])]
+        # 研报雷达(v3.6, 东财研报中心免费): 近30日机构覆盖, 标题+评级
+        try:
+            reps = data.stock_reports_recent(code, days=30, limit=6)
+            if reps:
+                lines.append("研报(近30日 %d 篇)：%s" % (
+                    len(reps), "；".join("%s《%s》%s" % (r["org"], r["title"][:22],
+                                                        r["rating"]) for r in reps[:3])))
+        except Exception:
+            pass
         lines.append("")
         wl_snap[code] = {"price": q.get("price"), "main_inflow_wan": q.get("main_inflow_wan"), "trig": trig}
         if cl_sm:
@@ -628,6 +658,25 @@ def build(args):
         radar_lines, ann_new, ann_pdf = announcement_radar(wl, outdir, days=_radar_days)
         lines += radar_lines
         print("[radar] 新公告%d条, 带PDF解读%d条" % (ann_new, ann_pdf), flush=True)
+        # ===== 3.2 互动问答(v3.6: 互动易, 深市; 沪市e互动有会话墙暂缺——通用渠道,
+        #      watchlist 出现深市标的即自动生效) =====
+        qa_lines = []
+        for s in wl:
+            _code = str(s.get("code")).split(".")[0]
+            _name = s.get("name") or _code
+            try:
+                qas = data.irm_qa_recent(_name, _code, days=max(_radar_days, 3))
+            except Exception:
+                qas = []
+            if not qas:
+                continue
+            qa_lines.append("- **%s(%s)**：" % (_name, _code))
+            for qa in qas[:3]:
+                _a = (" → 答：%s" % qa["a"][:70]) if qa["a"] else "（暂未回复）"
+                qa_lines.append("  - (%s) 问：%s%s" % (qa["date"][5:], qa["q"][:80], _a))
+        if qa_lines:
+            lines += ["### 3.2 互动问答（互动易 · 深市）", "",
+                      "> 散户/机构在问什么、董秘怎么答——业绩相关问答是先行温度计", ""] + qa_lines + [""]
     except Exception as ex:
         lines += ["## 三、公告解读", "> ⚠ 公告源异常(不影响其余模块): %s" % str(ex)[:80], ""]
 

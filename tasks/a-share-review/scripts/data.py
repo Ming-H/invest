@@ -945,3 +945,95 @@ def earnings_momentum(n=20, cand_limit=100):
         t["streak"] = cache["streak"].get(t["code"], 1)
     return {"period_label": label, "period": period,
             "updated": today_str, "rows": top}, None
+
+
+# ---------------- v3.6: 通用渠道扩展(调研纪要走公告分级/互动问答/研报/指标注册表) ----------------
+
+def irm_qa_recent(name, code, days=7, limit=5):
+    """互动易(深市)近N日新问答: [{q, a, date}]。keyWord=公司名搜索 + stockCode
+    客户端过滤 + updateDate 窗口过滤。沪市走上证e互动(会话墙, 2026-11-18 实测
+    不可编程访问)——沪市代码直接返回 []。失败/无新问答返回 [](降级不阻塞)。
+    mainContent=投资者提问, attachedContent=公司回复(空=未回复)。"""
+    c = str(code).split(".")[0]
+    if not c.startswith(("0", "2", "3")):
+        return []
+    try:
+        d = _post("http://irm.cninfo.com.cn/newircs/index/search",
+                  {"pageNo": 1, "pageSize": 30, "searchTypes": 11, "keyWord": name},
+                  headers={"User-Agent": "Mozilla/5.0"})
+        cutoff = time.time() * 1000 - days * 86400 * 1000
+        out = []
+        for r in d.get("results") or []:
+            if str(r.get("stockCode") or "").split(".")[0] != c:
+                continue
+            ts = max(int(r.get("updateDate") or 0), int(r.get("pubDate") or 0))
+            if ts < cutoff:
+                continue
+            out.append({"q": (r.get("mainContent") or "").strip(),
+                        "a": (r.get("attachedContent") or "").strip(),
+                        "date": time.strftime("%Y-%m-%d", time.localtime(ts / 1000))})
+            if len(out) >= limit:
+                break
+        return out
+    except Exception:
+        return []
+
+
+def stock_reports_recent(code, days=14, limit=5):
+    """东财研报中心近N日研报(免费): [{title, org, rating, date}]。2026-11-18 实测
+    松发股份返回东吴/国金/开源等真实研报。失败返回 []。"""
+    c = str(code).split(".")[0]
+    end = datetime.date.today()
+    begin = end - datetime.timedelta(days=days)
+    try:
+        d = _get("https://reportapi.eastmoney.com/report/list?industryCode=*&pageSize=%d"
+                 "&industry=*&rating=*&ratingChange=*&beginTime=%s&endTime=%s"
+                 "&pageNo=1&qType=0&code=%s" % (limit, begin.isoformat(), end.isoformat(), c),
+                 headers=DC_HDR)
+        out = []
+        for r in d.get("data") or []:
+            out.append({"title": (r.get("title") or "").strip(),
+                        "org": r.get("orgSName") or "",
+                        "rating": r.get("sRatingName") or "",
+                        "date": (r.get("publishDate") or "")[:10]})
+        return out
+    except Exception:
+        return []
+
+
+IND_EXAMPLE = os.path.join(SKILL_DIR, "indicators.example.json")
+IND_JSON = os.path.join(SKILL_DIR, "indicators.json")
+
+
+def industry_indicators():
+    """通用行业高频指标注册表 -> [{name, value, chg_pct, freq, note}]。
+    配置: indicators.json(优先, gitignored 个人层) 否则 indicators.example.json。
+    provider 两种: eastmoney_index(东财全球指数, 日频自动, BDI 实测可用) /
+    manual(月度手更——value/date/chg_pct 写在配置里)。单条失败静默跳过。"""
+    cfg = {}
+    for fp in (IND_JSON, IND_EXAMPLE):
+        if os.path.exists(fp):
+            try:
+                cfg = json.load(open(fp, encoding="utf-8"))
+            except Exception:
+                cfg = {}
+            break
+    out = []
+    for it in cfg.get("indicators") or []:
+        try:
+            if it.get("provider") == "eastmoney_index":
+                v = (_get("https://push2.eastmoney.com/api/qt/stock/get?secid=%s"
+                          "&fields=f43,f58,f170" % it["secid"]).get("data") or {})
+                if v.get("f43") is not None:
+                    out.append({"name": it["name"], "value": v["f43"] / 100.0,
+                                "chg_pct": (v["f170"] / 100.0
+                                            if v.get("f170") is not None else None),
+                                "freq": it.get("freq", "daily"), "note": it.get("note", "")})
+            elif it.get("provider") == "manual" and it.get("value") is not None:
+                out.append({"name": it["name"], "value": it.get("value"),
+                            "chg_pct": it.get("chg_pct"),
+                            "freq": it.get("freq", "monthly"),
+                            "note": it.get("date", "")})
+        except Exception:
+            continue
+    return out
