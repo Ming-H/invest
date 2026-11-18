@@ -857,20 +857,25 @@ def _norm_ymd(s):
 def earnings_high_growth_screen(period_label, limit=100):
     """问财筛选(每日1次, 占额度): 单季归母同比>40% 且单季归母≥1亿, 按单季归母降序。
     → [{code, name, np_yi, yoy_pct, disc_date}] 或 []。"""
-    q = ("%s单季归母净利润同比增长率大于40%%且单季归母净利润大于1亿元"
+    # 2026-11-18 问财语法漂移修复: "单季"措辞被映射回累计口径, 须用官方术语"单季度";
+    # 字段前缀随之变为 "单季度.归属于母公司所有者的净利润..." (试金石: 中远海控单季+81须入榜)
+    q = ("%s单季度归母净利润同比增长率大于40%%且单季度归母净利润大于1亿元"
          "且%s披露日期在2020年1月1日至2030年12月31日之间的股票,"
-         "按单季归母净利润从高到低排序" % (period_label, period_label))
+         "按单季度归母净利润从高到低排序" % (period_label, period_label))
     out = []
     for r in _wencai(q, limit):
         name = _pick(r, "股票简称")
         if not name or "ST" in name.upper() or name.startswith("退"):   # ST/退市警示出局(对齐earnings-reader闸门)
             continue
-        dd = _norm_ymd(_pick(r, "公告日期["))
+        dd = _norm_ymd(_pick(r, "公告日期[", "定期报告预计披露日期["))
         try:
             out.append({"code": str(_pick(r, "股票代码") or "").split(".")[0],
                         "name": name,
-                        "np_yi": round(float(_pick(r, "单季度_归母净利润[")) / 1e8, 1),
-                        "yoy_pct": round(float(_pick(r, "单季度_归母净利润同比增长率[")), 1),
+                        "np_yi": round(float(_pick(r, "单季度.归属于母公司所有者的净利润[",
+                                                   "单季度_归母净利润[")) / 1e8, 1),
+                        "yoy_pct": round(float(_pick(r, "单季度.归属于母公司所有者的净利润同比增长率[",
+                                                     "单季度_归母净利润同比增长率[",
+                                                     "归属于母公司所有者的净利润同比增长率[")) , 1),
                         "disc_date": dd})
         except (TypeError, ValueError):
             continue
