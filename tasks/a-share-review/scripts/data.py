@@ -413,6 +413,33 @@ def stock_quotes_batch(codes):
         return {}
 
 
+def stock_quotes_batch_tx(codes):
+    """腾讯批量行情(二级后备): {code: {name, price, chg}}。
+    push2全挂时的批量兜底——qt.gtimg.cn 一次请求可带数十只, 分批40只/请求。
+    字段: p[1]名称 p[3]现价 p[32]涨跌% (2026-11-02 v2设计文档已验证口径)。"""
+    if not codes:
+        return {}
+    out = {}
+    for i in range(0, len(codes), 40):
+        chunk = codes[i:i + 40]
+        url = "https://qt.gtimg.cn/q=" + ",".join(_sym(c) for c in chunk)
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            raw = urllib.request.urlopen(req, timeout=10).read().decode("gbk", "ignore")
+            for seg in raw.split(";"):
+                if "=" not in seg:
+                    continue
+                body = seg.split('"')[1] if '"' in seg else ""
+                p = body.split("~")
+                if len(p) < 33 or not p[3]:
+                    continue
+                out[str(p[2])] = {"name": p[1], "price": float(p[3]),
+                                  "chg": float(p[32]) if p[32] else None}
+        except Exception:
+            continue
+    return out
+
+
 def stock_quote(code):
     """单股快照(后备: 批量接口未覆盖时)。东财单股(含f170修复) → 腾讯(仅价/涨跌)。"""
     try:
@@ -926,6 +953,8 @@ def earnings_momentum(n=20, cand_limit=100):
     if cache.get("period") != period:          # 报告期滚动 → 缓存重建(基准价/连榜清零)
         cache = {"period": period, "base": {}, "streak": {}, "updated": None}
     quotes = stock_quotes_batch([c["code"] for c in cands])
+    if not quotes:   # v3.7.3: push2批量全挂(2026-11-19晨实测) → 腾讯批量兜底(40只/请求, 秒级)
+        quotes = stock_quotes_batch_tx([c["code"] for c in cands])
     rows = []
     for c in cands:
         if not c["disc_date"]:
