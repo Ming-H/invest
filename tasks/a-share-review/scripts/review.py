@@ -299,7 +299,20 @@ def build(args):
     if amt_series:
         amt_series[-1]["amount_state"] = amt_state
 
-    lines += ["## 一、大盘", "", "### 1.1 指数与量能", "",
+    lines += ["## 一、大盘", ""]
+    # ===== 1.0 隔夜全球市场(v3.7 晨跑模式: 美股收盘×持仓β) =====
+    og = data.overnight_global()
+    if og:
+        lines += ["### 1.0 隔夜全球市场（美股收盘 × 持仓β）", "",
+                  "| 指标 | 收盘 | 涨跌 | β映射 |",
+                  "|---|---:|---:|---|"]
+        for x in og:
+            chg = ("%+.2f%%" % x["chg_pct"]) if x.get("chg_pct") is not None else "—"
+            lines.append("| %s | %s | %s | %s |" % (x["label"], x["price"], chg, x["beta"]))
+        lines += ["", "⟦CLAUDE: 隔夜市场对今日开盘的含义——结合上表(道指/纳指定基调, 费半联动科创, XBI→药明, 油价→松发, 汇率→外资), 2-3句: 今日顺风/逆风/中性 + 盘前最该注意的一件事⟧", ""]
+    else:
+        degraded.append("隔夜全球市场")
+    lines += ["### 1.1 指数与量能", "",
               "| 指数 | 收盘 | 涨跌幅 |",
               "|---|---:|---:|"]
     for x in ov:
@@ -717,6 +730,7 @@ def build(args):
 
     # machine.jsonl append(时间序列, 一日一行; 在 .gitignore 保护下)
     snap = {"date": trade_date,
+            "overnight": [{"l": x["label"], "c": x["chg_pct"]} for x in (og or [])],
             "indices": ov, "breadth": br,
             "total_amount_yi": total_amt, "amount_state": amt_state,
             "ma": {k: msh.get(k) for k in ("ma5", "ma20", "ma250", "trend", "beta")} if msh else None,

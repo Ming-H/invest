@@ -1037,3 +1037,54 @@ def industry_indicators():
         except Exception:
             continue
     return out
+
+
+# ---------------- 模块1.0: 隔夜全球市场(v3.7, 2026-11-19 晨跑模式) ----------------
+# 美股收盘(北京05:00后定论)+持仓β映射; 注册表驱动, 任一符号缺失自动跳过。
+# 晨跑(07:00-09:00)运行时美股已收盘且公告窗口完整, 是本模块设计的标准场景。
+
+OVERNIGHT_REGISTRY = [
+    ("100.DJIA",  "道琼斯",           "全球风险偏好", 100),
+    ("100.NDX",   "纳斯达克",         "科技主线β", 100),
+    ("100.SPX",   "标普500",          "全球基调", 100),
+    ("107.SMH",   "费城半导体ETF",    "科创/半导体β", 100),
+    ("107.XBI",   "XBI生物科技ETF",   "药明β(CXO)", 100),
+    ("107.USO",   "原油ETF",          "松发β(油运/造船链)", 100),
+    ("133.USDCNH", "美元/离岸人民币", "外资流向", 10000),  # 外汇×10000口径(指数/ETF为×100)
+    ("100.N225",  "日经225",          "亚太对照", 100),
+]
+
+
+def _parse_overnight(diff):
+    """ulist diff → [{label, price, chg_pct, beta}](纯函数, 可离线单测)。
+    key = f13(市场).f12(代码); 价格/涨跌幅 ×100 还原; 缺符号跳过。"""
+    by = {}
+    for it in diff or []:
+        by["%s.%s" % (it.get("f13"), it.get("f12"))] = it
+    out = []
+    for secid, label, beta, div in OVERNIGHT_REGISTRY:
+        it = by.get(secid)
+        if not it or not isinstance(it.get("f2"), (int, float)):
+            continue
+        chg = it.get("f3") if isinstance(it.get("f3"), (int, float)) else None
+        out.append({"label": label, "price": round(it["f2"] / float(div), div >= 1000 and 4 or 2),
+                    "chg_pct": round(chg / 100.0, 2) if chg is not None else None, "beta": beta})
+    return out
+
+
+def overnight_global():
+    """隔夜全球市场快照(东财ulist批量, 免费) → list(可能为空=降级)。
+    push2 https 间歇重置(2026-11-19实测) → https→http→91镜像 三级轮询。"""
+    secids = ",".join(x[0] for x in OVERNIGHT_REGISTRY)
+    q = "secids=%s&fields=f2,f3,f12,f13,f14&ut=fa5fd1943c7b386f172d6893dbfba10b" % secids
+    for url in ("https://push2.eastmoney.com/api/qt/ulist.np/get?" + q,
+                "http://push2.eastmoney.com/api/qt/ulist.np/get?" + q,
+                "https://91.push2.eastmoney.com/api/qt/ulist.np/get?" + q):
+        try:
+            d = _get(url, retries=1)
+            diff = (d.get("data") or {}).get("diff")
+            if diff:
+                return _parse_overnight(diff)
+        except Exception:
+            continue
+    return []
