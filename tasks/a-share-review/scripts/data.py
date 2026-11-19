@@ -354,14 +354,14 @@ def jingxuan_members():
 
 # ---------------- 模块三: 板块资金流(内置 flow 模块, 2026-11-05 收编) ----------------
 
-def sector_flows(top_in=8, top_out=6):
+def sector_flows(top_in=8, top_out=6, asof=None):
     """行业板块主力净流入/流出: {inflow: [...], outflow: [...]}。"""
     res = {"inflow": [], "outflow": []}
     if flow.wencai_cli_path() is None:
         return res
     for view, key, n in (("industry-inflow", "inflow", top_in), ("industry-outflow", "outflow", top_out)):
         try:
-            rows, _meta = flow.fetch_rows(view, top=n, timeout=90)
+            rows, _meta = flow.fetch_rows(view, top=n, timeout=90, asof=asof)
             res[key] = [{"name": r.get("name"),
                          "amount": round((r.get("amount") or 0) / 1e8, 2),
                          "pct": r.get("pct")} for r in rows]
@@ -378,10 +378,22 @@ def stock_quotes_batch(codes):
     if not codes:
         return {}
     secids = ",".join(_secid(c) for c in codes)
+    # v3.7.1: push2 https 间歇重置(2026-11-19晨实测批量行情降级) → https/http/91镜像三级轮询
+    q = ("secids=%s&fields=f2,f3,f8,f9,f12,f14,f20,f21,f62"
+         "&ut=fa5fd1943c7b386f172d6893dbfba10b" % secids)
+    d = None
+    for _u in ("https://push2.eastmoney.com/api/qt/ulist.np/get?" + q,
+               "http://push2.eastmoney.com/api/qt/ulist.np/get?" + q,
+               "https://91.push2.eastmoney.com/api/qt/ulist.np/get?" + q):
+        try:
+            d = _get(_u, retries=1)
+            if d and (d.get("data") or {}).get("diff"):   # 空diff不算成功, 继续轮询
+                break
+        except Exception:
+            continue
     try:
-        d = _get("https://push2.eastmoney.com/api/qt/ulist.np/get?secids=%s"
-                 "&fields=f2,f3,f8,f9,f12,f14,f20,f21,f62&ut=fa5fd1943c7b386f172d6893dbfba10b" % secids)
-        out = {}
+        if d is None:
+            raise RuntimeError("ulist三级轮询全部失败")
         for it in (d.get("data") or {}).get("diff") or []:
             code = it.get("f12")
             if not code:

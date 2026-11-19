@@ -351,7 +351,7 @@ def build(args):
         degraded.append("图1数据")
 
     # ===== 1.2 资金主线(原模块三, v3 并入大盘) =====
-    fl = data.sector_flows(8, 6)
+    fl = data.sector_flows(8, 6, asof=trade_date)   # v3.7.1: 盘前"今日"口径修复
     if not fl["inflow"] and not fl["outflow"]:
         degraded.append("板块资金流")
     def flow_txt(rows, sign):

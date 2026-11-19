@@ -210,9 +210,11 @@ def _call_cli(query, limit, timeout):
         raise FlowError(f"cli 输出非 JSON：{proc.stdout[:300]}")
 
 
-def fetch_rows(view, top=DEFAULT_TOP, sector=None, timeout=DEFAULT_TIMEOUT):
+def fetch_rows(view, top=DEFAULT_TOP, sector=None, timeout=DEFAULT_TIMEOUT, asof=None):
     """库入口: -> (rows, meta)。无数据返回 ([], meta); 失败抛 FlowError。
-    data.py 板块资金流直接调用本函数, 不再 shell-out 独立技能。"""
+    data.py 板块资金流直接调用本函数, 不再 shell-out 独立技能。
+    asof: 显式交易日("YYYY-MM-DD")——盘前运行时问财"今日"指向未开盘的新交易日导致空返回
+    (2026-11-19 08:3x实测: "今日…"0条 / "2026年11月18日…"320条), 传入则替换模板中的"今日"。"""
     if view not in VIEWS:
         raise FlowError(f"未知 view: {view}")
     query_tmpl, _, vtype = VIEWS[view]
@@ -222,6 +224,9 @@ def fetch_rows(view, top=DEFAULT_TOP, sector=None, timeout=DEFAULT_TIMEOUT):
         query = query_tmpl.format(sector=sector)
     else:
         query = query_tmpl
+    if asof:
+        y, m, d = asof.split("-")
+        query = query.replace("今日", "%s年%d月%d日" % (y, int(m), int(d)))
 
     limit = max(top, 50)  # 多取一些，客户端按带符号金额重排兜底
     payload = _call_cli(query, limit, timeout)
