@@ -912,6 +912,9 @@ def earnings_momentum(n=20, cand_limit=100):
         base,price,chg_pct,streak}]}, err_or_None)。问财空返回时 rows=[] + err。"""
     label, period = latest_report_period()
     cands = earnings_high_growth_screen(label, cand_limit)
+    if not cands:   # 问财间歇性空返回(2026-11-18/19三次实测: 同句式分钟级0条↔420条) → 延时重试一次
+        time.sleep(3)
+        cands = earnings_high_growth_screen(label, cand_limit)
     if not cands:
         return {"period_label": label, "period": period,
                 "rows": []}, "问财筛选无返回"
