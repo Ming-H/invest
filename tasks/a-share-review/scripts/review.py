@@ -717,8 +717,7 @@ def build(args):
                 _time = (nt.get("time") or "")[:10]
                 _sum = nt.get("summary") or ""
                 mt_lines.append("- (%s) **%s**%s" % (_time, _t[:60],
-                    ("  
-  > %s..." % _sum[:100]) if _sum else ""))
+                    (" — %s..." % _sum[:100]) if _sum else ""))
     if mt_lines:
         lines += ["### 3.3 电话会/闭门会/调研纪要（见闻搜索）", "",
                   "> 机构信息面——电话会纪要/闭门会观点/产业调研摘要", ""] + mt_lines[:8] + [""]
