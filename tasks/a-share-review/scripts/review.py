@@ -309,7 +309,7 @@ def build(args):
         for x in og:
             chg = ("%+.2f%%" % x["chg_pct"]) if x.get("chg_pct") is not None else "—"
             lines.append("| %s | %s | %s | %s |" % (x["label"], x["price"], chg, x["beta"]))
-        lines += ["", "⟦CLAUDE: 隔夜市场对今日开盘的含义——结合上表(道指/纳指定基调, 费半联动科创, XBI→药明, 油价→松发, 汇率→外资), 2-3句: 今日顺风/逆风/中性 + 盘前最该注意的一件事⟧", ""]
+        lines += ["", "⟦CLAUDE: 隔夜美股(A股收盘后)对今日开盘的含义——先用1句概括昨日A股自身走势(不归因美股), 再看上表(道指/纳指/XBI/油价/汇率), 2-3句: ①昨日A股为什么这样走 ②隔夜美股确认/背离了什么 ③对今日开盘顺风/逆风/中性 + 最该注意的一件事⟧", ""]
     else:
         degraded.append("隔夜全球市场")
     lines += ["### 1.1 指数与量能", "",
@@ -692,6 +692,39 @@ def build(args):
                       "> 散户/机构在问什么、董秘怎么答——业绩相关问答是先行温度计", ""] + qa_lines + [""]
     except Exception as ex:
         lines += ["## 三、公告解读", "> ⚠ 公告源异常(不影响其余模块): %s" % str(ex)[:80], ""]
+
+    # ===== 3.3 电话会/闭门会/调研纪要雷达(v3.9, 2026-11-24) =====
+    # 华尔街见闻搜索API(免费), 按持仓标的+关键词组合拉纪要标题+摘要
+    _mt_keys = []
+    for s_ in wl:
+        _n = s_.get("name") or ""
+        if _n:
+            _mt_keys.append(_n)
+    _mt_keys += ["电话会", "闭门会"]
+    mt_lines, mt_seen_titles = [], set()
+    for _kw in _mt_keys[:6]:   # 最多6个关键词, 防止接口压力
+        try:
+            _notes = data.meeting_notes_search(_kw, limit=3)
+        except Exception:
+            _notes = []
+        for nt in _notes:
+            _t = nt.get("title") or ""
+            if _t in mt_seen_titles or not _t:
+                continue
+            # 只保留含关键词的(过滤无关热搜)
+            if any(k in _t for k in ["电话会","闭门会","调研","纪要","业绩说明","分析师","券商"]):
+                mt_seen_titles.add(_t)
+                _time = (nt.get("time") or "")[:10]
+                _sum = nt.get("summary") or ""
+                mt_lines.append("- (%s) **%s**%s" % (_time, _t[:60],
+                    ("  
+  > %s..." % _sum[:100]) if _sum else ""))
+    if mt_lines:
+        lines += ["### 3.3 电话会/闭门会/调研纪要（见闻搜索）", "",
+                  "> 机构信息面——电话会纪要/闭门会观点/产业调研摘要", ""] + mt_lines[:8] + [""]
+    else:
+        lines += ["### 3.3 电话会/闭门会/调研纪要（见闻搜索）", "",
+                  "今日无相关纪要。", ""]
 
     # ===== 四、三行小结 + 五、昨日观察回检 =====
     trend = (msh or {}).get("trend", "—")

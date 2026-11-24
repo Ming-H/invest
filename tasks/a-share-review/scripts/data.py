@@ -508,6 +508,29 @@ def stock_kline(code, days=250):
     return [{"date": r["day"], "close": float(r["close"]), "volume": float(r["volume"])} for r in (d or [])]
 
 
+def meeting_notes_search(query, limit=5):
+    """华尔街见闻搜索电话会/闭门会/调研纪要: [{title, uri, time, summary}]。
+    v3.9(2026-11-24): 3.3 电话会/闭门会雷达数据源。
+    注意: 见闻搜索API返回item直接含title/content_short(不嵌套resource.data),
+    且title带<em>高亮标签须清除。"""
+    try:
+        d = _get("https://api-one-wscn.awtmt.com/apiv1/search/article?query=%s&limit=%d"
+                 % (urllib.parse.quote(query), limit),
+                 {"User-Agent": "Mozilla/5.0"}, timeout=10)
+        out = []
+        for it in (d.get("data") or {}).get("items") or []:
+            title = (it.get("title") or "").replace("<em>", "").replace("</em>", "")
+            if not title:
+                continue
+            out.append({"title": title,
+                        "uri": it.get("uri") or "",
+                        "time": str(it.get("display_time") or ""),
+                        "summary": (it.get("content_short") or "")[:120]})
+        return out
+    except Exception:
+        return []
+
+
 def stock_news(name, limit=5):
     """华尔街见闻搜索: [{title, uri, time}]。"""
     try:
