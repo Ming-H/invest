@@ -382,19 +382,9 @@ def build(args):
     if jx_err:
         degraded.append("精选表联动(%s)" % jx_err)
     final_pool = _load_final_pool()
-    if gainers:
-        lines += ["| 标的 | 近20日涨幅 | 板块 | 总市值 | 精选表/终选池 |",
-                  "|---|---:|---|---:|---|"]
-        for g in gainers:
-            tags = []
-            if g["code"] in jx:
-                tags.append("★精选%s分" % (jx[g["code"]].get("score") or "?"))
-            if final_pool and g["name"] in final_pool:
-                tags.append("◎终选池")
-            lines.append("| %s(%s) | +%d%% | %s | %s亿 | %s |" % (
-                g["name"], g["code"], g["pct"], g["industry"],
-                "{:,}".format(g["mcap_yi"]) if g["mcap_yi"] else "—", " ".join(tags)))
-    else:
+    # v3.9.3: 删除1.3冗余表格(与图3数据完全重复), 保留连板梯队一行+图表;
+    # 精选表/终选池标签已由charts.chart_gainers在图中标注(★/◎), 无需正文重复
+    if not gainers:
         lines.append("(近20日涨幅榜未获取)")
     lb = data.lianban_ladder()
     if lb:
