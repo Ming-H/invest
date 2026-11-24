@@ -693,37 +693,57 @@ def build(args):
     except Exception as ex:
         lines += ["## 三、公告解读", "> ⚠ 公告源异常(不影响其余模块): %s" % str(ex)[:80], ""]
 
-    # ===== 3.3 电话会/闭门会/调研纪要雷达(v3.9, 2026-11-24) =====
-    # 华尔街见闻搜索API(免费), 按持仓标的+关键词组合拉纪要标题+摘要
-    _mt_keys = []
+    # ===== 3.3 持仓标的信息面雷达(v3.9.2, 2026-11-24) =====
+    # 只搜watchlist标的相关的纪要/电话会/调研/新闻, 不做泛搜
+    mt_lines, mt_seen_titles = [], set()
     for s_ in wl:
         _n = s_.get("name") or ""
-        if _n:
-            _mt_keys.append(_n)
-    _mt_keys += ["电话会", "闭门会"]
-    mt_lines, mt_seen_titles = [], set()
-    for _kw in _mt_keys[:6]:   # 最多6个关键词, 防止接口压力
+        _code = str(s_.get("code") or "").split(".")[0]
+        if not _n:
+            continue
+        # 每只标的搜4组关键词(精确匹配)
+        for _suffix in [" 电话会", " 调研", " 闭门会", " 纪要"]:
+            _kw = _n + _suffix
+            try:
+                _notes = data.meeting_notes_search(_kw, limit=3)
+            except Exception:
+                _notes = []
+            for nt in _notes:
+                _t = nt.get("title") or ""
+                if not _t or _t in mt_seen_titles:
+                    continue
+                # 标题必须含标的名或代码(确保相关)
+                if _n in _t or _code in _t:
+                    mt_seen_titles.add(_t)
+                    _time = (nt.get("time") or "")[:10]
+                    _sum = (nt.get("summary") or "").replace("<em>","").replace("</em>","")
+                    mt_lines.append("- **%s**: (%s) %s%s" % (_n, _time, _t[:70],
+                        (" — %s..." % _sum[:100]) if _sum else ""))
+    # 补一轮: 直接搜标的名称(不带后缀), 捞业绩说明会公告等
+    for s_ in wl:
+        _n = s_.get("name") or ""
+        if not _n:
+            continue
         try:
-            _notes = data.meeting_notes_search(_kw, limit=3)
+            _notes = data.meeting_notes_search(_n, limit=5)
         except Exception:
             _notes = []
         for nt in _notes:
             _t = nt.get("title") or ""
-            if _t in mt_seen_titles or not _t:
+            if not _t or _t in mt_seen_titles:
                 continue
-            # 只保留含关键词的(过滤无关热搜)
-            if any(k in _t for k in ["电话会","闭门会","调研","纪要","业绩说明","分析师","券商"]):
+            if _n in _t and any(k in _t for k in ["电话会","调研","纪要","业绩说明","闭门会","分析师"]):
                 mt_seen_titles.add(_t)
                 _time = (nt.get("time") or "")[:10]
-                _sum = nt.get("summary") or ""
-                mt_lines.append("- (%s) **%s**%s" % (_time, _t[:60],
+                _sum = (nt.get("summary") or "").replace("<em>","").replace("</em>","")
+                mt_lines.append("- **%s**: (%s) %s%s" % (_n, _time, _t[:70],
                     (" — %s..." % _sum[:100]) if _sum else ""))
     if mt_lines:
-        lines += ["### 3.3 电话会/闭门会/调研纪要（见闻搜索）", "",
-                  "> 机构信息面——电话会纪要/闭门会观点/产业调研摘要", ""] + mt_lines[:8] + [""]
+        lines += ["### 3.3 持仓标的信息面（电话会/调研/纪要）", "",
+                  "> 机构信息面——持仓标的的电话会纪要/调研记录/闭门会观点", ""] + mt_lines[:8] + [""]
     else:
-        lines += ["### 3.3 电话会/闭门会/调研纪要（见闻搜索）", "",
-                  "今日无相关纪要。", ""]
+        lines += ["### 3.3 持仓标的信息面（电话会/调研/纪要）", "",
+                  "持仓标的近无相关纪要(电话会/调研在财报季密集出现)。", ""]
 
     # ===== 四、三行小结 + 五、昨日观察回检 =====
     trend = (msh or {}).get("trend", "—")
